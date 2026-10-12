@@ -1,0 +1,489 @@
+/* PMM Coach – app logic. Everything runs on the device; nothing is sent anywhere. */
+(function () {
+  'use strict';
+  var APP_VERSION = '1.0.0';
+  var $ = function (s, r) { return (r || document).querySelector(s); };
+  var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  var LS = {
+    get: function (k, d) { try { var v = localStorage.getItem('pmmc.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set: function (k, v) { try { localStorage.setItem('pmmc.' + k, JSON.stringify(v)); } catch (e) { /* storage may be unavailable */ } }
+  };
+
+  /* ---------- tiny IndexedDB key/value store (for an imported PMM index) ---------- */
+  var IDB = {
+    open: function () {
+      return new Promise(function (res, rej) {
+        if (!window.indexedDB) return rej(new Error('no idb'));
+        var r = indexedDB.open('pmmcoach', 1);
+        r.onupgradeneeded = function () { r.result.createObjectStore('kv'); };
+        r.onsuccess = function () { res(r.result); };
+        r.onerror = function () { rej(r.error); };
+      });
+    },
+    get: function (k) { return IDB.open().then(function (db) { return new Promise(function (res, rej) { var q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = function () { res(q.result); }; q.onerror = function () { rej(q.error); }; }); }).catch(function () { return undefined; }); },
+    set: function (k, v) { return IDB.open().then(function (db) { return new Promise(function (res, rej) { var t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = function () { rej(t.error); }; }); }); },
+    del: function (k) { return IDB.open().then(function (db) { return new Promise(function (res) { var t = db.transaction('kv', 'readwrite'); t.objectStore('kv').delete(k); t.oncomplete = res; }); }).catch(function () {}); }
+  };
+
+  /* ---------- icons ---------- */
+  var IC = {
+    shield: 'M12 2l8 3v6c0 5-3.4 9.2-8 11-4.6-1.8-8-6-8-11V5z',
+    hat: 'M12 2a10 10 0 100 20 10 10 0 000-20zm5 11h-4v4h-2v-4H7v-2h4V7h2v4h4z',
+    check: 'M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z',
+    chart: 'M4 20V10h3v10zm6 0V4h3v16zm6 0v-7h3v7z',
+    book: 'M18 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12V2zM6 4h5v8l-2.500-1.500L6 12V4z',
+    gate: 'M4 21V3h2v18zm14 0V3h2v18zM8 8h8v2H8zm0 6h8v2H8z',
+    swap: 'M7 7h10l-3-3 1.4-1.4L21 8l-5.6 5.4L14 12l3-3H7zm10 10H7l3 3-1.4 1.4L3 16l5.6-5.4L10 12l-3 3h10z',
+    flag: 'M5 3h2v18H5zm4 1h10l-2 4 2 4H9z',
+    doc: 'M6 2h8l6 6v14H6zm7 1.5V9h5.5z',
+    search: 'M10.5 3a7.5 7.5 0 015.9 12.1l4.3 4.3-1.4 1.4-4.3-4.3A7.5 7.5 0 1110.5 3zm0 2a5.5 5.5 0 100 11 5.5 5.5 0 000-11z',
+    copy: 'M8 3h11v14H8zm2 2v10h7V5zM5 7h2v14h10v2H5z',
+    open: 'M4 4h8v2H6v12h12v-6h2v8H4zm10 0h6v6h-2V7.4l-7.3 7.3-1.4-1.4L16.6 6H14z',
+    mark: 'M6 3h12v18l-6-4-6 4z',
+    clock: 'M12 2a10 10 0 100 20 10 10 0 000-20zm1 5v5.4l3.5 2.1-1 1.7L11 13V7z',
+    close: 'M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4L12 13.4 6.4 19 5 17.6l5.6-5.6L5 6.4z'
+  };
+  function ico(n) { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + IC[n] + '"/></svg>'; }
+
+  /* ---------- state ---------- */
+  var engine = null, meta = {}, RES = null, hlStems = [];
+  var S = { q: '', literal: [], req: false, kind: '', sec: '', expanded: {}, showGroups: 10, suggestIdx: -1, sugg: [], seq: 0, lastFocus: null };
+  var desktop = window.pmmDesktop || null;
+
+  /* ---------- coach (mascot) ---------- */
+  var POSE = { welcome: 'img/welcome.png', listening: 'img/listening.png', thinking: 'img/thinking.png', explaining: 'img/explaining.png', success: 'img/success.png', encourage: 'img/encourage.png' };
+  var pose = 'welcome', curImg = 'A', restore = null, restoreTimer = null;
+  Object.keys(POSE).forEach(function (k) { var im = new Image(); im.src = POSE[k]; });
+  function setPose(p, html) {
+    if (html != null) $('#bubbleText').innerHTML = html;
+    if (p === pose) return;
+    var a = $('#avA'), b = $('#avB'), cur = curImg === 'A' ? a : b, nxt = curImg === 'A' ? b : a;
+    nxt.src = POSE[p]; nxt.classList.remove('off'); cur.classList.add('off');
+    curImg = curImg === 'A' ? 'B' : 'A'; pose = p;
+  }
+  function celebrate(msg) {
+    clearTimeout(restoreTimer);
+    var keep = { p: pose, h: $('#bubbleText').innerHTML };
+    if (!restore) restore = keep;
+    setPose('success', msg || "You're on track!");
+    restoreTimer = setTimeout(function () { if (restore) { setPose(restore.p, restore.h); restore = null; } }, 2600);
+  }
+  function toast(msg) {
+    var t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t);
+    toast.t = setTimeout(function () { t.hidden = true; }, 2200);
+  }
+
+  /* ---------- settings ---------- */
+  function applyPrefs() {
+    var th = LS.get('theme', 'system'), root = document.documentElement;
+    if (th === 'system') root.removeAttribute('data-theme'); else root.setAttribute('data-theme', th);
+    var fs = { s: 15, m: 16, l: 18 }[LS.get('size', 'm')] || 16; root.style.setProperty('--fs', fs + 'px');
+  }
+
+  /* ---------- helpers ---------- */
+  function secLabel(c) { return (c.h || '').replace(/^(\d[\d.]*)\s+(PMM-\S+\s*)?/, function (m, n, code) { return '\u00a7' + n + ' '; }).trim(); }
+  function kindLabel(c) { return { Procedure: 'Procedure step', Policy: 'Policy', Objective: 'Objective', Forms: 'Forms & templates', Workflow: 'Workflow chart', Roles: 'Roles', 'Inputs/Outputs': 'Inputs & outputs', General: 'Content' }[c.k] || c.k; }
+  function cite(c) {
+    var p = engine.processOf(c);
+    return 'NWC PMM ' + (meta.ver || '') + ' (' + (meta.ref || '') + ') \u2013 ' + (p.pseudo ? p.title : p.id + ' ' + p.title) + (c.h ? ' \u2013 ' + secLabel(c) : '') + ' \u2013 p.' + c.p;
+  }
+  function copyText(txt) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt).then(function () { return true; }, function () { return legacy(); });
+    return Promise.resolve(legacy());
+    function legacy() { var ta = document.createElement('textarea'); ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) {} ta.remove(); return ok; }
+  }
+  function savedList() { return LS.get('saved', []).filter(function (s) { var c = engine.chunk(s.i); return c && c.t.slice(0, 48) === s.tag; }); }
+  function isSaved(i) { return savedList().some(function (s) { return s.i === i; }); }
+  function toggleSave(i) {
+    var l = savedList(), k = l.findIndex(function (s) { return s.i === i; });
+    if (k >= 0) l.splice(k, 1); else { var c = engine.chunk(i); l.unshift({ i: i, tag: c.t.slice(0, 48) }); }
+    LS.set('saved', l); updateSavedCount(); return k < 0;
+  }
+  function updateSavedCount() { var n = savedList().length, b = $('#savedCount'); b.textContent = n; b.hidden = !n; }
+  function recents() { return LS.get('recent', []); }
+  function pushRecent(q) {
+    q = q.trim(); if (q.length < 2) return;
+    var l = recents().filter(function (x) { return x.toLowerCase() !== q.toLowerCase(); }); l.unshift(q); LS.set('recent', l.slice(0, 10));
+  }
+
+  /* ---------- home ---------- */
+  var TOPICS = [
+    { t: 'Project risk management', d: 'Identify, analyse, respond to and review risks', q: 'risk management', ic: 'shield' },
+    { t: 'Health, safety & environment', d: 'HSE planning, assurance and control', q: 'HSE assurance', ic: 'hat' },
+    { t: 'Quality assurance & audit', d: 'QA, QC and PMM application audits', q: 'quality assurance audit', ic: 'check' },
+    { t: 'Performance reporting', d: 'Design and construction progress reports', q: 'performance reporting', ic: 'chart' },
+    { t: 'Training & knowledge', d: 'Team development and lessons learned', q: 'training lessons learned', ic: 'book' },
+    { t: 'Stage gate reviews', d: 'Deliverables, committees and approvals', q: 'stage gate review', ic: 'gate' },
+    { t: 'Variations & claims', d: 'Variation control, claims, time extensions', q: 'variation claims', ic: 'swap' },
+    { t: 'Handover & close-out', d: 'Initial and final acceptance, closing', q: 'handover acceptance close', ic: 'flag' }
+  ];
+  var ASK = ['Who approves a variation order?', 'How often is the risk register reviewed?', 'What must be in the HSE plan?', 'NCR distribution steps',
+    'Requirements for the lessons learned register', 'When is a stage gate review required?'];
+
+  function renderHome() {
+    var secs = engine.sections(), procs = engine.processes();
+    var rec = recents();
+    var h = '<div class="h-sec"><h2>Start with a topic</h2><div class="topics">' + TOPICS.map(function (t, i) {
+      return '<button class="topic" type="button" data-topic="' + i + '"><span class="t-ic">' + ico(t.ic) + '</span><span class="t-txt"><b>' + esc(t.t) + '</b><span class="t-d">' + esc(t.d) + '</span></span></button>';
+    }).join('') + '</div></div>';
+    h += '<div class="h-sec"><h2>Try asking</h2><div class="ask">' + ASK.map(function (a) { return '<button type="button" data-ask="' + esc(a) + '">' + esc(a.replace(/[?]$/, '')) + '</button>'; }).join('') + '</div></div>';
+    if (rec.length) h += '<div class="h-sec"><h2>Recent searches</h2><div class="chips">' + rec.map(function (r) { return '<button class="chip" type="button" data-ask="' + esc(r) + '">' + esc(r) + '</button>'; }).join('') + '</div></div>';
+    h += '<div class="h-sec"><h2>Browse the manual</h2><p class="sub">' + procs.length + ' processes in ' + secs.length + ' sections</p>' + secs.map(function (s) {
+      var ps = procs.filter(function (p) { return p.sec === s.n; });
+      return '<details class="sec"><summary><span class="sn">' + s.n + '</span><span>' + esc(s.title) + '</span></summary>' + (ps.length ? '<ul>' + ps.map(function (p) {
+        return '<li><button type="button" data-ctx="' + esc(p.id) + '"><span>' + esc(p.title) + '</span><span class="pg">p.' + p.page + '</span></button></li>';
+      }).join('') + '</ul>' : '<ul><li class="saved-note">General guidance for this section is searchable above.</li></ul>') + '</details>';
+    }).join('') + '</div>';
+    $('#home').innerHTML = h;
+  }
+
+  /* ---------- search ---------- */
+  var debTimer = null, commitTimer = null;
+  function setState(st) { $('#shell').dataset.state = st; $('#filters').hidden = st !== 'results'; $('#home').hidden = st === 'results'; $('#results').hidden = st !== 'results'; $('#understood').hidden = st !== 'results' }
+
+  function showHome() {
+    S.q = ''; S.literal = []; RES = null; setState('home'); $('#understood').hidden = true;
+    setPose('welcome', 'How can I help you today?'); renderHome();
+  }
+
+  function runSearch(commit) {
+    var q = $('#q').value; S.q = q;
+    if (q.trim().length < 1) { showHome(); return; }
+    var my = ++S.seq;
+    var res = engine.search(q, { literal: S.literal.length ? S.literal : false, requirementsOnly: S.req, kind: S.kind, section: S.sec ? +S.sec : 0 });
+    RES = res; hlStems = res.hl || []; S.expanded = {}; S.showGroups = 10;
+    setState('results');
+    renderUnderstood(res); renderResults(res);
+    // coach: show "thinking" briefly, then settle on the outcome
+    setPose('thinking', 'Let me analyze this.');
+    setTimeout(function () { if (my === S.seq) settle(res); }, 380);
+    clearTimeout(commitTimer);
+    if (commit) pushRecent(q); else commitTimer = setTimeout(function () { if (res.total) pushRecent(q); }, 2200);
+  }
+
+  function settle(res) {
+    var n = res.groups.length;
+    if (res.direct) return setPose('explaining', 'Here\u2019s <b>' + esc(res.direct.label) + '</b>.');
+    if (!res.total) {
+      var unk = res.interp && res.interp.unknown && res.interp.unknown[0];
+      return setPose('encourage', unk ? 'I couldn\u2019t match \u201c' + esc(unk) + '\u201d. Let\u2019s make progress together \u2013 try another word.' : 'Let\u2019s make progress together! Try fewer or different words.');
+    }
+    if (res.confidence === 'low') return setPose('encourage', 'Only part of your search matched. Let\u2019s make progress together \u2013 check what\u2019s missing below.');
+    var g = res.groups[0];
+    setPose('explaining', 'Found <b>' + res.total + '</b> match' + (res.total === 1 ? '' : 'es') + ' in <b>' + n + '</b> process' + (n === 1 ? '' : 'es') + '. Start with <b>' + esc(g.title) + '</b>.');
+  }
+
+  var INTENT = { who: 'who is responsible', when: 'timing or frequency', req: 'requirements (shall / must)', policy: 'policies', how: 'steps and procedures', form: 'forms and templates', objective: 'objectives', define: 'a definition' };
+
+  function renderUnderstood(res) {
+    var it = res.interp, el = $('#understood'), h = '';
+    if (!it) { el.hidden = true; return; }
+    if (it.direct) { el.innerHTML = '<div class="row"><span class="lead">Jumping straight to <em>' + esc(it.direct) + '</em></span></div>'; return; }
+    var fixes = it.corrections.length || it.expansions.length;
+    var shown = S.q.trim();
+    if (it.corrections.length) {
+      var map = {}; it.corrections.forEach(function (c) { map[c.from] = c.to; });
+      shown = it.content.map(function (w) { return map[w.replace(/&/g, '')] || w; }).join(' ');
+      h += '<div class="row"><span class="lead">Showing results for <em>' + esc(shown) + '</em></span>' +
+        '<button type="button" class="linkbtn" data-literal="all">Search exactly as typed</button></div>';
+    } else if (S.literal.length) {
+      h += '<div class="row"><span class="lead">Searching exactly as typed</span><button type="button" class="linkbtn" data-literal="none">Allow corrections</button></div>';
+    } else {
+      h += '<div class="row"><span class="lead">Here\u2019s how I read that</span></div>';
+    }
+    var chips = it.concepts.map(function (c) {
+      var syn = c.alts.filter(function (a) { return a.via === 'acronym' }); var raw = esc(c.raw.toUpperCase() === c.raw && c.raw.length < 6 ? c.raw.toUpperCase() : c.raw);
+      if (c.status === 'typo') { var first = c.alts[0]; var to = RES && it.corrections.filter(function (x) { return x.from === c.raw.replace(/&/g, ''); })[0]; return '<button type="button" class="chip fix" data-literal-word="' + esc(c.raw) + '" title="Click to keep what you typed">' + raw + ' \u2192 <b>' + esc(to ? to.to : '') + '</b></button>'; }
+      if (c.status === 'split') { var sp = c.alts[0].label; return '<span class="chip fix">' + raw + ' \u2192 <b>' + esc(sp) + '</b></span>'; }
+      if (c.status === 'acronym') { return '<span class="chip fix">' + raw + ' = <b>' + esc(syn[0] ? syn[0].label : '') + '</b></span>'; }
+      if (c.status === 'prefix') return '<span class="chip">' + raw + '\u2026</span>';
+      if (c.status === 'none') return '<span class="chip warn">\u201c' + raw + '\u201d isn\u2019t in the PMM \u2013 ignored</span>';
+      return '<span class="chip">' + raw + '</span>';
+    }).join('');
+    if (chips) h += '<div class="row">' + chips + '</div>';
+    if (it.intents.length) h += '<div class="row"><span>Looking for</span>' + it.intents.map(function (k) { return '<span class="chip">' + esc(INTENT[k]) + '</span>'; }).join('') + '</div>';
+    // related-wording note
+    var rel = [];
+    it.concepts.forEach(function (c) { var s = c.alts.filter(function (a) { return a.via === 'synonym'; }); if (s.length && rel.length < 3) rel.push(c.raw); });
+    if (rel.length && !S.literal.length) h += '<div class="row" style="color:var(--muted)">Also matching related wording for: ' + rel.map(esc).join(', ') + '</div>';
+    // ambiguity: several unrelated areas
+    var bySec = {}, tot = 0;
+    res.groups.slice(0, 8).forEach(function (g) { bySec[g.section] = (bySec[g.section] || 0) + g.count; tot += g.count; });
+    var secs = Object.keys(bySec).sort(function (a, b) { return bySec[b] - bySec[a]; });
+    var g0 = res.groups[0], g2 = res.groups[2];
+    if (!S.sec && secs.length >= 3 && g2 && g2.score > g0.score * 0.6 && !res.direct) {
+      var titles = {}; engine.sections().forEach(function (s) { titles[s.n] = s.title; });
+      h += '<div class="clarify"><div class="row"><span class="lead">This touches several areas. Which one do you mean?</span></div><div class="row">' + secs.slice(0, 5).map(function (n) {
+        return '<button class="chip" type="button" data-sec="' + n + '">' + esc((titles[n] || 'Section ' + n).replace(/^Project /, '')) + ' <span style="color:var(--muted)">' + bySec[n] + '</span></button>';
+      }).join('') + '</div></div>';
+    }
+    el.innerHTML = h; el.hidden = false;
+  }
+
+  function itemHTML(it, res) {
+    var c = engine.chunk(it.i), long = c.t.length > 420;
+    var h = '<article class="item" data-i="' + it.i + '"><div class="i-meta"><span class="kind">' + esc(kindLabel(c)) + '</span>' + (c.r ? '<span class="kind req">Requirement</span>' : '') +
+      (c.h ? '<span>' + esc(secLabel(c)) + '</span>' : '') + '<span>p.' + c.p + '</span></div>' +
+      '<div class="i-text' + (long ? ' clamp' : '') + '">' + engine.highlight(c.t, hlStems) + '</div>';
+    if (long) h += '<button type="button" class="linkbtn" data-more style="font-size:.8rem;margin-top:.2rem">Show more</button>';
+    h += '<div class="i-foot">';
+    c.f.slice(0, 3).forEach(function (f) { var t = engine.formTitle(f); h += '<button type="button" class="chip form" data-form="' + esc(f) + '" title="' + esc(t) + '">' + esc(f.replace(/^PMF-/, 'PMF-')) + (t ? ' \u00b7 ' + esc(t.length > 28 ? t.slice(0, 27) + '\u2026' : t) : '') + '</button>'; });
+    if (c.f.length > 3) h += '<span class="chip form">+' + (c.f.length - 3) + ' forms</span>';
+    if (it.missing && it.missing.length && it.cov < 1) h += '<span class="miss">Doesn\u2019t mention: ' + it.missing.map(esc).join(', ') + '</span>';
+    h += '<span class="acts"><button class="act" type="button" data-copy="' + it.i + '" aria-label="Copy requirement with citation">' + ico('copy') + 'Copy</button>' +
+      '<button class="act" type="button" data-save="' + it.i + '" aria-pressed="' + isSaved(it.i) + '" aria-label="Save requirement">' + ico('mark') + '<span>' + (isSaved(it.i) ? 'Saved' : 'Save') + '</span></button>' +
+      '<button class="act" type="button" data-ctx="' + esc(engine.processOf(c).id) + '" data-focus="' + it.i + '" aria-label="Open in context">' + ico('open') + 'Context</button></span></div></article>';
+    return h;
+  }
+
+  function renderResults(res) {
+    var el = $('#results'), h = '';
+    var active = S.req || S.kind || S.sec;
+    if (!res.total) {
+      h = '<div class="empty"><h3>' + (active ? 'No match with these filters' : 'No match for \u201c' + esc(S.q.trim()) + '\u201d') + '</h3>' +
+        '<p>' + (active ? 'Try removing a filter, or search with fewer words.' : 'Use the key topic words, such as \u201crisk register\u201d. An abbreviation or its full name both work. I fix typos and ignore word order.') + '</p>' +
+        (active ? '<p><button class="linkbtn" type="button" data-clear-filters>Clear filters</button></p>' : '') +
+        '<div class="chips" style="margin-top:.8rem">' + TOPICS.slice(0, 6).map(function (t, i) { return '<button class="chip" type="button" data-topic="' + i + '">' + esc(t.t) + '</button>'; }).join('') + '</div></div>';
+      el.innerHTML = h; return;
+    }
+    h += '<div class="summary" aria-live="polite"><span>' + res.total + ' match' + (res.total === 1 ? '' : 'es') + ' in ' + res.groups.length + ' process' + (res.groups.length === 1 ? '' : 'es') + '</span>' +
+      (active ? '<button type="button" class="linkbtn" data-clear-filters>Clear filters</button>' : '<span>' + res.took + ' ms</span>') + '</div>';
+    res.groups.slice(0, S.showGroups).forEach(function (g, gi) {
+      var open = S.expanded[g.id], lim = open ? 15 : 3, items = g.items.slice(0, lim);
+      var best = gi === 0 && res.groups.length > 1 && !res.direct;
+      h += '<section class="group' + (best ? ' best' : '') + '"><div class="g-head"><h3 class="g-title"><button type="button" data-ctx="' + esc(g.id) + '">' + esc(g.title) + '</button></h3>' + (best ? '<span class="badge">Best match</span>' : '<span></span>') +
+        '<div class="g-meta">' + (g.pseudo ? '' : '<span class="code">' + esc(g.id) + '</span>') + '<span>Section ' + g.section + ' \u00b7 ' + esc(g.sectionTitle.replace(/^Project /, '')) + '</span><span>p.' + g.page + '</span><span>' + g.count + ' match' + (g.count === 1 ? '' : 'es') + '</span></div></div>';
+      h += items.map(function (it) { return itemHTML(it, res); }).join('');
+      if (g.count > items.length) h += '<button type="button" class="more" data-expand="' + esc(g.id) + '">Show ' + Math.min(g.count - items.length, 15 - items.length) + ' more in this process</button>';
+      else if (open && g.count > 15) h += '<button type="button" class="more" data-ctx="' + esc(g.id) + '">Open the full process</button>';
+      h += '</section>';
+    });
+    if (res.groups.length > S.showGroups) h += '<button type="button" class="more" data-more-groups>Show more processes (' + (res.groups.length - S.showGroups) + ')</button>';
+    el.innerHTML = h;
+  }
+
+  /* ---------- autocomplete ---------- */
+  function renderSugg(list) {
+    var ul = $('#sugg'); S.sugg = list; S.suggestIdx = -1;
+    if (!list.length) { ul.hidden = true; $('#q').setAttribute('aria-expanded', 'false'); return; }
+    ul.innerHTML = list.map(function (s, i) {
+      var icn = { process: 'doc', word: 'search', acronym: 'book', recent: 'clock', form: 'doc' }[s.type] || 'search';
+      return '<li role="option" id="sg' + i + '" data-i="' + i + '"><span class="s-ic">' + ico(icn) + '</span><span class="s-main"><span class="s-label">' + esc(s.label) + '</span><span class="s-sub">' + esc(s.sub || '') + '</span></span></li>';
+    }).join('');
+    ul.hidden = false; $('#q').setAttribute('aria-expanded', 'true');
+  }
+  function hideSugg() { $('#sugg').hidden = true; $('#q').setAttribute('aria-expanded', 'false'); S.suggestIdx = -1; }
+  function pickSugg(s) {
+    hideSugg(); var q = $('#q');
+    if (s.type === 'process') { openContext(s.process); return; }
+    if (s.type === 'recent' || s.type === 'word') { q.value = s.label; }
+    else if (s.type === 'acronym') { q.value = q.value.replace(new RegExp('\\b' + s.replace[0].replace(/[^a-z0-9]/gi, '.?') + '\\b', 'i'), s.replace[1]); }
+    $('#btnClear').hidden = false; runSearch(true);
+  }
+
+  /* ---------- context drawer ---------- */
+  function openLayer(id, html) {
+    S.lastFocus = document.activeElement;
+    var el = $(id); el.innerHTML = html; el.hidden = false; $('#scrim').hidden = false;
+    document.body.style.overflow = 'hidden';
+    var f = $('.close', el); if (f) f.focus();
+    return el;
+  }
+  function closeLayers() {
+    ['#drawer', '#sheet'].forEach(function (s) { $(s).hidden = true; });
+    $('#scrim').hidden = true; document.body.style.overflow = '';
+    if (S.lastFocus && S.lastFocus.focus) try { S.lastFocus.focus(); } catch (e) {}
+  }
+
+  function openContext(id, focusI) {
+    var p = engine.process(id); if (!p) return;
+    var chunks = engine.chunksOfProcess(id), blocks = [], last = null;
+    chunks.forEach(function (c) { if (!last || last.h !== c.h) { last = { h: c.h, k: c.k, items: [] }; blocks.push(last); } last.items.push(c); });
+    var procs = engine.processes(), idx = procs.findIndex(function (x) { return x.id === id; });
+    var prev = procs[idx - 1], next = procs[idx + 1];
+    var kinds = []; blocks.forEach(function (b) { if (kinds.indexOf(b.k) < 0 && b.k !== 'General') kinds.push(b.k); });
+    var h = '<div class="d-head"><h2>' + (p.pseudo ? '' : '<span class="code">' + esc(p.id) + ' \u00b7 p.' + p.page + '</span>') + esc(p.title) + '</h2>' +
+      '<button class="icon-btn close" type="button" data-close aria-label="Close">' + ico('close') + '</button></div>' +
+      '<div class="d-nav"><label class="sr" for="dq">Search within this process</label><input id="dq" type="search" placeholder="Search within this process" style="flex:1;min-width:160px;border:1px solid var(--line-2);border-radius:999px;padding:.4rem .8rem;background:var(--field)">' +
+      kinds.map(function (k) { return '<button class="chip" type="button" data-jump="' + esc(k) + '">' + esc(kindLabel({ k: k })) + '</button>'; }).join('') + '</div>' +
+      '<div class="d-body" id="dBody">' + blocks.map(function (b) {
+        return '<section class="d-sec" data-kind="' + esc(b.k) + '">' + (b.h ? '<h3>' + esc(secLabel({ h: b.h })) + '</h3>' : '') +
+          b.items.map(function (c) {
+            return '<div class="d-chunk' + (c.i === focusI ? ' focus' : '') + '" id="ck' + c.i + '" data-i="' + c.i + '"><div class="i-text">' + engine.highlight(c.t, hlStems) + '</div>' +
+              '<div class="i-foot">' + c.f.map(function (f) { var t = engine.formTitle(f); return '<button class="chip form" type="button" data-form="' + esc(f) + '">' + esc(f) + (t ? ' \u00b7 ' + esc(t) : '') + '</button>'; }).join('') +
+              '<span class="acts"><button class="act" type="button" data-copy="' + c.i + '">' + ico('copy') + 'Copy</button><button class="act" type="button" data-save="' + c.i + '" aria-pressed="' + isSaved(c.i) + '">' + ico('mark') + '<span>' + (isSaved(c.i) ? 'Saved' : 'Save') + '</span></button></span></div></div>';
+          }).join('') + '</section>';
+      }).join('') + '</div>' +
+      '<div class="d-foot">' + (prev ? '<button class="btn" type="button" data-ctx="' + esc(prev.id) + '">\u2039 Previous process</button>' : '') +
+      (next ? '<button class="btn" type="button" data-ctx="' + esc(next.id) + '">Next process \u203a</button>' : '') +
+      '<button class="btn primary" type="button" data-copy-proc="' + esc(id) + '" style="margin-left:auto">Copy citation</button></div>';
+    var el = openLayer('#drawer', h);
+    if (focusI != null) { var t = $('#ck' + focusI, el); if (t) setTimeout(function () { t.scrollIntoView({ block: 'center' }); }, 30); }
+    $('#dq', el).addEventListener('input', function (e) {
+      var v = e.target.value.trim(), keep = null;
+      if (v.length >= 2) { var r = engine.search(v, { process: id }); keep = {}; r.groups.forEach(function (g) { g.items.forEach(function (it) { keep[it.i] = 1; }); }); hlStems = r.hl || hlStems; }
+      $$('.d-chunk', el).forEach(function (n) { n.style.display = !keep || keep[n.dataset.i] ? '' : 'none'; if (keep && keep[n.dataset.i]) n.querySelector('.i-text').innerHTML = engine.highlight(engine.chunk(+n.dataset.i).t, hlStems); });
+      $$('.d-sec', el).forEach(function (s) { s.style.display = !keep || $$('.d-chunk', s).some(function (n) { return n.style.display !== 'none'; }) ? '' : 'none'; });
+    });
+  }
+
+  /* ---------- settings & saved sheets ---------- */
+  function seg(name, opts, cur) { return '<div class="seg" data-seg="' + name + '">' + opts.map(function (o) { return '<button type="button" data-v="' + o[0] + '" aria-pressed="' + (o[0] === cur) + '">' + o[1] + '</button>'; }).join('') + '</div>'; }
+  function openSettings() {
+    var m = meta, h = '<div class="d-head"><h2 id="sheetTitle">Settings</h2><button class="icon-btn close" type="button" data-close aria-label="Close">' + ico('close') + '</button></div><div class="d-body">';
+    h += '<div class="s-row"><div class="l"><b>Theme</b></div>' + seg('theme', [['system', 'Auto'], ['light', 'Light'], ['dark', 'Dark']], LS.get('theme', 'system')) + '</div>';
+    h += '<div class="s-row"><div class="l"><b>Text size</b></div>' + seg('size', [['s', 'Small'], ['m', 'Medium'], ['l', 'Large']], LS.get('size', 'm')) + '</div>';
+    if (desktop) {
+      var pr = desktop.prefs || {};
+      h += '<div class="s-row"><div class="l"><b>Open when I sign in</b><span>Keeps the coach on standby in the tray</span></div>' + seg('login', [['1', 'On'], ['0', 'Off']], pr.openAtLogin ? '1' : '0') + '</div>';
+      h += '<div class="s-row"><div class="l"><b>Summon shortcut</b><span>' + esc(pr.shortcut || 'Ctrl+Alt+P') + ' shows or hides the coach from anywhere</span></div></div>';
+    }
+    h += '<div class="s-row"><div class="l"><b>PMM content</b><span>' + esc((m.doc || 'PMM') + ' ' + (m.ver || '') + ' \u00b7 ' + (m.ref || '') + ' \u00b7 issued ' + (m.issued || '?') + '<br>' + (m.chunks || 0) + ' searchable passages from ' + (m.pages || '?') + ' pages \u00b7 indexed ' + (m.built || '?')) + '</span></div></div>';
+    h += '<div class="s-row"><div class="l"><b>Load a PMM index file</b><span>Use this when a new PMM issue is released. Your PMO team supplies the file.</span></div><button class="btn" type="button" data-import>Choose file</button></div>';
+    if (S.imported) h += '<div class="s-row"><div class="l"><b>Using an imported index</b><span>Switch back to the one packaged with the app</span></div><button class="btn" type="button" data-reset-index>Reset</button></div>';
+    h += '<div class="s-row"><div class="l"><b>History and saved items</b><span>Stored only on this device</span></div><button class="btn danger" type="button" data-wipe>Clear</button></div>';
+    h += '<p class="note">PMM Coach ' + APP_VERSION + ' is a search aid. The controlled PMM document remains the authority; always confirm a requirement against it before you rely on it. Everything runs on this device and nothing you type is sent anywhere.</p></div>';
+    openLayer('#sheet', h);
+  }
+  function openSaved() {
+    var l = savedList();
+    var h = '<div class="d-head"><h2 id="sheetTitle">Saved requirements</h2><button class="icon-btn close" type="button" data-close aria-label="Close">' + ico('close') + '</button></div><div class="d-body">';
+    if (!l.length) h += '<div class="empty"><h3>Nothing saved yet</h3><p>Tap Save on any requirement to keep it here, with its page reference.</p></div>';
+    else h += l.map(function (s) {
+      var c = engine.chunk(s.i), p = engine.processOf(c);
+      return '<div class="saved-item"><div class="i-meta"><span class="kind">' + esc(kindLabel(c)) + '</span><span>' + esc(p.pseudo ? p.title : p.id) + '</span><span>p.' + c.p + '</span></div><div class="i-text clamp">' + esc(c.t) + '</div>' +
+        '<div class="i-foot"><span class="acts"><button class="act" type="button" data-copy="' + s.i + '">' + ico('copy') + 'Copy</button><button class="act" type="button" data-ctx="' + esc(p.id) + '" data-focus="' + s.i + '">' + ico('open') + 'Context</button><button class="act" type="button" data-unsave="' + s.i + '">' + ico('close') + 'Remove</button></span></div></div>';
+    }).join('');
+    h += '</div>' + (l.length ? '<div class="d-foot"><button class="btn primary" type="button" data-copy-saved>Copy all with citations</button></div>' : '');
+    openLayer('#sheet', h);
+  }
+
+  /* ---------- events ---------- */
+  function bind() {
+    var q = $('#q');
+    q.addEventListener('focus', function () { if (!q.value) { renderSugg(recents().slice(0, 5).map(function (r) { return { type: 'recent', label: r, sub: 'Recent search' }; })); } setPose(pose === 'welcome' || pose === 'listening' ? 'listening' : pose, pose === 'welcome' ? 'I\u2019m listening.' : null); });
+    q.addEventListener('input', function () {
+      var v = q.value; $('#btnClear').hidden = !v;
+      if (!v) { hideSugg(); clearTimeout(debTimer); showHome(); setPose('listening', 'I\u2019m listening.'); return; }
+      S.literal = [];
+      setPose('listening', 'I\u2019m listening.');
+      renderSugg(v.trim().length >= 2 ? engine.suggest(v, 6) : []);
+      clearTimeout(debTimer); debTimer = setTimeout(function () { runSearch(false); }, 240);
+    });
+    q.addEventListener('keydown', function (e) {
+      var n = S.sugg.length;
+      if (e.key === 'ArrowDown' && n && !$('#sugg').hidden) { e.preventDefault(); S.suggestIdx = (S.suggestIdx + 1) % n; markSugg(); }
+      else if (e.key === 'ArrowUp' && n && !$('#sugg').hidden) { e.preventDefault(); S.suggestIdx = (S.suggestIdx - 1 + n) % n; markSugg(); }
+      else if (e.key === 'Escape') { if (!$('#sugg').hidden) hideSugg(); else if (q.value) { q.value = ''; $('#btnClear').hidden = true; showHome(); } }
+    });
+    $('#searchForm').addEventListener('submit', function (e) {
+      e.preventDefault(); clearTimeout(debTimer);
+      if (S.suggestIdx >= 0 && S.sugg[S.suggestIdx]) { pickSugg(S.sugg[S.suggestIdx]); return; }
+      hideSugg(); S.literal = S.literal; runSearch(true);
+      if (window.matchMedia('(pointer:coarse)').matches) q.blur();
+    });
+    $('#sugg').addEventListener('mousedown', function (e) { e.preventDefault(); var li = e.target.closest('li'); if (li) pickSugg(S.sugg[+li.dataset.i]); });
+    $('#sugg').addEventListener('touchstart', function (e) { var li = e.target.closest('li'); if (li) { e.preventDefault(); pickSugg(S.sugg[+li.dataset.i]); } }, { passive: false });
+    q.addEventListener('blur', function () { setTimeout(hideSugg, 120); if (pose === 'listening' && !q.value) setPose('welcome', 'How can I help you today?'); });
+    $('#btnClear').addEventListener('click', function () { q.value = ''; $('#btnClear').hidden = true; hideSugg(); showHome(); q.focus(); });
+
+    $('#fReq').addEventListener('change', function (e) { S.req = e.target.checked; runSearch(false); });
+    $('#fKind').addEventListener('change', function (e) { S.kind = e.target.value; runSearch(false); });
+    $('#fSec').addEventListener('change', function (e) { S.sec = e.target.value; runSearch(false); });
+
+    $('#btnSettings').addEventListener('click', openSettings);
+    $('#btnSaved').addEventListener('click', openSaved);
+    $('#scrim').addEventListener('click', closeLayers);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !$('#scrim').hidden) closeLayers();
+      if ((e.key === '/' && !/input|textarea|select/i.test(document.activeElement.tagName)) || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) { e.preventDefault(); q.focus(); q.select(); }
+    });
+    var fab = $('#fabTop');
+    window.addEventListener('scroll', function () { fab.hidden = !(window.scrollY > 700 && $('#shell').dataset.state === 'results'); }, { passive: true });
+    fab.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); setTimeout(function () { q.focus(); q.select(); }, 350); });
+    var pin = $('#btnPin');
+    if (desktop) {
+      pin.hidden = false;
+      pin.addEventListener('click', function () { var on = pin.getAttribute('aria-pressed') !== 'true'; pin.setAttribute('aria-pressed', on); desktop.setAlwaysOnTop(on); toast(on ? 'Pinned on top' : 'Unpinned'); });
+      if (desktop.onFocusSearch) desktop.onFocusSearch(function () { q.focus(); q.select(); });
+      if (desktop.onPinChanged) desktop.onPinChanged(function (on) { pin.setAttribute('aria-pressed', on); });
+      if (desktop.getPrefs) desktop.getPrefs().then(function (p) { desktop.prefs = p; pin.setAttribute('aria-pressed', !!p.alwaysOnTop); }).catch(function () {});
+    }
+
+    document.addEventListener('click', function (e) {
+      var t = e.target.closest('button, .chip'); if (!t) return;
+      var d = t.dataset;
+      if (d.topic != null) { q.value = TOPICS[+d.topic].q; $('#btnClear').hidden = false; S.literal = []; runSearch(true); window.scrollTo(0, 0); }
+      else if (d.ask != null) { q.value = d.ask; $('#btnClear').hidden = false; S.literal = []; runSearch(true); window.scrollTo(0, 0); }
+      else if (d.ctx != null) { var fo = d.focus != null ? +d.focus : undefined; if (!$('#sheet').hidden) { $('#sheet').hidden = true; } openContext(d.ctx, fo); }
+      else if (d.expand != null) { S.expanded[d.expand] = true; renderResults(RES); }
+      else if (d.moreGroups != null) { S.showGroups = 40; renderResults(RES); }
+      else if (d.more != null) { var tx = t.previousElementSibling; tx.classList.toggle('clamp'); t.textContent = tx.classList.contains('clamp') ? 'Show more' : 'Show less'; }
+      else if (d.literal != null) { S.literal = d.literal === 'all' ? true : []; if (d.literal === 'all') S.literal = (RES.interp.content || []).slice(); runSearch(false); }
+      else if (d.literalWord != null) { S.literal = (S.literal || []).concat(d.literalWord); runSearch(false); }
+      else if (d.sec != null) { S.sec = d.sec; $('#fSec').value = d.sec; runSearch(false); }
+      else if (d.clearFilters != null) { S.req = false; S.kind = ''; S.sec = ''; $('#fReq').checked = false; $('#fKind').value = ''; $('#fSec').value = ''; runSearch(false); }
+      else if (d.form != null) { q.value = d.form; $('#btnClear').hidden = false; closeLayers(); S.literal = []; runSearch(true); window.scrollTo(0, 0); }
+      else if (d.copy != null) { var c = engine.chunk(+d.copy); copyText(c.t + '\n\n' + cite(c)).then(function (ok) { if (ok) { toast('Copied with page reference'); celebrate(); } }); }
+      else if (d.copyProc != null) { var pp = engine.process(d.copyProc); copyText('NWC PMM ' + meta.ver + ' (' + meta.ref + ') \u2013 ' + pp.id + ' ' + pp.title + ' \u2013 p.' + pp.page).then(function () { toast('Citation copied'); }); }
+      else if (d.copySaved != null) { copyText(savedList().map(function (s) { var c = engine.chunk(s.i); return c.t + '\n' + cite(c); }).join('\n\n---\n\n')).then(function () { toast('All saved items copied'); }); }
+      else if (d.save != null) {
+        var on = toggleSave(+d.save); $$('[data-save="' + d.save + '"]').forEach(function (b) { b.setAttribute('aria-pressed', on); var s = b.querySelector('span'); if (s) s.textContent = on ? 'Saved' : 'Save'; });
+        toast(on ? 'Saved' : 'Removed from saved'); if (on) celebrate();
+      }
+      else if (d.unsave != null) { toggleSave(+d.unsave); openSaved(); }
+      else if (d.jump != null) { var sec = $('.d-sec[data-kind="' + d.jump + '"]', $('#drawer')); if (sec) sec.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+      else if (d.close != null) closeLayers();
+      else if (d.seg != null) { /* handled below */ }
+      else if (t.parentElement && t.parentElement.dataset.seg) {
+        var name = t.parentElement.dataset.seg, v = d.v;
+        $$('button', t.parentElement).forEach(function (b) { b.setAttribute('aria-pressed', b === t); });
+        if (name === 'theme' || name === 'size') { LS.set(name, v); applyPrefs(); }
+        if (name === 'login' && desktop) { desktop.setPrefs({ openAtLogin: v === '1' }); desktop.prefs = Object.assign({}, desktop.prefs, { openAtLogin: v === '1' }); }
+      }
+      else if (d.import != null) { $('#fileIdx').click(); }
+      else if (d.resetIndex != null) { IDB.del('index').then(function () { location.reload(); }); }
+      else if (d.wipe != null) { LS.set('recent', []); LS.set('saved', []); updateSavedCount(); toast('History and saved items cleared'); if (!RES) renderHome(); }
+    });
+    $('#fileIdx').addEventListener('change', function (e) {
+      var f = e.target.files[0]; if (!f) return;
+      var r = new FileReader();
+      r.onload = function () {
+        try {
+          var txt = String(r.result).replace(/^\s*window\.PMM_INDEX\s*=\s*/, '').replace(/;\s*$/, ''), idx = JSON.parse(txt);
+          if (!idx.chunks || !idx.chunks.length) throw new Error('not a PMM index');
+          IDB.set('index', idx).then(function () { toast('Index loaded \u2013 restarting'); setTimeout(function () { location.reload(); }, 600); }, function () { toast('Could not store the index on this device'); });
+        } catch (err) { toast('That file is not a PMM Coach index'); }
+      };
+      r.readAsText(f);
+    });
+  }
+  function markSugg() { $$('#sugg li').forEach(function (li, i) { li.setAttribute('aria-selected', i === S.suggestIdx); if (i === S.suggestIdx) { li.scrollIntoView({ block: 'nearest' }); $('#q').setAttribute('aria-activedescendant', li.id); } }); }
+
+  /* ---------- boot ---------- */
+  function noIndex() {
+    $('#home').innerHTML = '<div class="empty"><h3>Load the PMM to get started</h3><p>This copy of PMM Coach was installed without the manual\u2019s content. Ask your PMO team for the PMM index file (pmm-index.json), then choose it below.</p><p><button class="btn primary" type="button" data-import>Choose index file</button></p></div>';
+    $('#searchForm').style.display = 'none'; setPose('encourage', 'Let\u2019s make progress together! I just need the PMM index first.');
+    bind();
+  }
+  function start(index, imported) {
+    S.imported = imported;
+    engine = PMMEngine.create(index); meta = engine.meta();
+    var sel = $('#fSec'); engine.sections().forEach(function (s) { var o = document.createElement('option'); o.value = s.n; o.textContent = s.n + '. ' + s.title.replace(/^Project /, ''); sel.appendChild(o); });
+    bind(); updateSavedCount(); setState('home'); renderHome();
+    if ('serviceWorker' in navigator && /^https?:/.test(location.protocol) && !window.Capacitor) navigator.serviceWorker.register('sw.js').catch(function () {});
+    var url = new URLSearchParams(location.search).get('q'); if (url) { $('#q').value = url; $('#btnClear').hidden = false; runSearch(true); }
+  }
+  function boot() {
+    applyPrefs();
+    if (desktop && desktop.getPrefs) desktop.getPrefs().then(function (p) { desktop.prefs = p; }).catch(function () {});
+    IDB.get('index').then(function (idx) {
+      if (idx && idx.chunks) start(idx, true);
+      else if (window.PMM_INDEX) start(window.PMM_INDEX, false);
+      else noIndex();
+    });
+  }
+  boot();
+})();

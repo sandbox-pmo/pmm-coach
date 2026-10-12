@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#85162E">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'">
+<title>PMM Coach</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="img/favicon.png">
+<link rel="apple-touch-icon" href="img/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#results">Skip to results</a>
+
+<div class="shell" id="shell" data-state="home">
+  <header class="top">
+    <div class="brand">
+      <img class="brand-logo" src="img/hill-logo.png" alt="Hill International">
+      <div class="brand-text">
+        <div class="wordmark"><span>PMM</span> Coach</div>
+        <div class="tagline">Your PMO consultant</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="icon-btn" id="btnPin" type="button" hidden aria-pressed="false" title="Keep on top of other windows">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3l7 7-3 1-3.5 3.5.5 4.5-2 .5-3.5-3.5L5 20l-1-1 4.5-4.5L5 11l.5-2 4.5.5L13.500 6z"/></svg>
+        <span class="sr">Keep on top</span>
+      </button>
+      <button class="icon-btn" id="btnSaved" type="button" title="Saved requirements">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+        <span class="count" id="savedCount" hidden>0</span><span class="sr">Saved requirements</span>
+      </button>
+      <button class="icon-btn" id="btnSettings" type="button" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.500a3.500 3.500 0 100 7 3.500 3.500 0 000-7zm8.500 4.500l-1.900-.4a6.800 6.800 0 00-.7-1.700l1.100-1.600-1.800-1.800-1.600 1.100a6.800 6.800 0 00-1.700-.7L13.500 6h-3l-.4 1.900a6.800 6.800 0 00-1.700.7L6.800 7.500 5 9.300l1.100 1.600c-.3.500-.5 1.100-.7 1.700l-1.900.4v2.500l1.900.4c.2.600.4 1.200.7 1.700L5 18.700 6.800 20.500l1.600-1.100c.5.300 1.100.5 1.700.7l.4 1.900h3l.4-1.900c.6-.2 1.200-.4 1.700-.7l1.600 1.100 1.800-1.800-1.100-1.600c.3-.5.5-1.100.7-1.700l1.900-.4z"/></svg>
+        <span class="sr">Settings</span>
+      </button>
+    </div>
+  </header>
+
+  <aside class="rail">
+    <section class="coach" aria-live="polite">
+      <div class="avatar" id="avatar">
+        <img id="avA" src="img/welcome.png" alt="">
+        <img id="avB" src="img/listening.png" alt="" class="off">
+      </div>
+      <div class="bubble" id="bubble"><p id="bubbleText">How can I help you today?</p></div>
+    </section>
+
+    <form class="searchbox" id="searchForm" role="search" autocomplete="off">
+      <label class="sr" for="q">Search the PMM</label>
+      <div class="field">
+        <svg class="mag" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.500 3a7.500 7.500 0 015.900 12.100l4.300 4.300-1.400 1.400-4.300-4.300A7.500 7.500 0 1110.500 3zm0 2a5.500 5.500 0 100 11 5.500 5.500 0 000-11z"/></svg>
+        <input id="q" type="search" enterkeyhint="search" spellcheck="false" autocapitalize="off" autocorrect="off"
+               placeholder="Ask in your own words"
+               role="combobox" aria-expanded="false" aria-controls="sugg" aria-autocomplete="list">
+        <button type="button" class="clear" id="btnClear" aria-label="Clear search" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.400 5l5.600 5.600L17.600 5 19 6.400 13.400 12l5.600 5.600-1.400 1.400-5.600-5.600L6.400 19 5 17.600l5.600-5.600L5 6.400z"/></svg>
+        </button>
+      </div>
+      <ul class="sugg" id="sugg" role="listbox" hidden></ul>
+      <p class="hint" id="hint">Typos, word order and abbreviations are fine. You can also type a code (RIS-040), a section (13.5.2) or a page (p.384).</p>
+    </form>
+
+    <div class="filters" id="filters" hidden>
+      <label class="tog"><input type="checkbox" id="fReq"><span>Requirements only</span></label>
+      <label class="sel"><span class="sr">Type of content</span>
+        <select id="fKind">
+          <option value="">All content</option><option>Policy</option><option>Procedure</option>
+          <option>Objective</option><option>Forms</option><option>Workflow</option><option>Roles</option>
+        </select></label>
+      <label class="sel"><span class="sr">Section</span><select id="fSec"><option value="">All sections</option></select></label>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div id="understood" class="understood" hidden></div>
+    <div id="results" tabindex="-1"></div>
+    <div id="home"></div>
+  </main>
+</div>
+
+<button class="fab" id="fabTop" type="button" hidden aria-label="Back to search"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.500 3a7.500 7.500 0 015.900 12.100l4.300 4.300-1.400 1.400-4.300-4.300A7.500 7.500 0 1110.500 3zm0 2a5.500 5.500 0 100 11 5.500 5.500 0 000-11z"/></svg></button>
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden></aside>
+<aside class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden></aside>
+<input type="file" id="fileIdx" accept=".json,.js,application/json" hidden>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="pmm-index.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
