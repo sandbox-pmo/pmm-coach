@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#85162E">
 <meta name="color-scheme" content="light dark">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; font-src 'self'; connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co">
 <title>PMM Coach</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="img/favicon.png">
@@ -28,6 +28,9 @@
       <button class="icon-btn" id="btnPin" type="button" hidden aria-pressed="false" title="Keep on top of other windows">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3l7 7-3 1-3.5 3.5.5 4.5-2 .5-3.5-3.5L5 20l-1-1 4.5-4.5L5 11l.5-2 4.5.5L13.500 6z"/></svg>
         <span class="sr">Keep on top</span>
+      </button>
+      <button class="icon-btn" id="btnChat" type="button" title="Ask the Coach (chat)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H8l-4 4z"/></svg><span class="sr">Ask the Coach</span>
       </button>
       <button class="icon-btn" id="btnSaved" type="button" title="Saved requirements">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
@@ -76,6 +79,7 @@
   </aside>
 
   <main class="main" id="main">
+    <div id="answerBox"></div>
     <div id="understood" class="understood" hidden></div>
     <div id="results" tabindex="-1"></div>
     <div id="home"></div>
@@ -91,6 +95,7 @@
 
 <script src="pmm-index.js"></script>
 <script src="engine.js"></script>
+<script src="llm.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

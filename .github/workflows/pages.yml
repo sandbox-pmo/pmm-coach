@@ -1,0 +1,36 @@
+name: Publish web app
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Assemble site (adds the on-device AI runtime from npm)
+        run: |
+          mkdir -p site/vendor
+          cp -r index.html styles.css app.js engine.js llm.js llm-worker.js sw.js manifest.webmanifest img fonts .nojekyll site/
+          cp vendor/TRANSFORMERS-LICENSE.txt site/vendor/
+          mkdir -p /tmp/rt && cd /tmp/rt && npm init -y >/dev/null && npm install --ignore-scripts --no-audit --no-fund @huggingface/transformers@4.3.1
+          cp node_modules/@huggingface/transformers/dist/transformers.min.js "$GITHUB_WORKSPACE/site/vendor/transformers.bundle.js"
+          cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs "$GITHUB_WORKSPACE/site/vendor/"
+          gzip -9 -c node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm > "$GITHUB_WORKSPACE/site/vendor/ort-wasm-simd-threaded.jsep.wasm.gz"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+      - id: d
+        uses: actions/deploy-pages@v4

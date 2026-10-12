@@ -19,7 +19,7 @@
 
   var STOP = new Set(('a an the of to in on for and or is are was were be been being am do does did doing what which ' +
     'how i we you it its this that these those with by as at from my our me us can could would will shall should ' +
-    'about into than then there their they them he she his her if so not no any all some please tell show give find ' +
+    'about into than then there their they them many much he she his her if so not no any all some please tell show give find ' +
     'need want like get got have has had having need needs also just very more most other such via per etc').split(' '));
   // words that describe what the user wants rather than the topic itself
   var INTENT_WORDS = new Set(['who', 'whom', 'whose', 'when', 'how', 'requirement', 'requirements', 'required', 'require',
@@ -560,8 +560,207 @@
       return gs.slice(1, n + 1).map(function (g) { return { id: g.id, title: g.title, page: g.page }; });
     }
 
+    /* ====================================================================
+     * Answer layer: understands the kind of question (how many / who / when /
+     * what is / yes-no / list) and returns the best-fit statement, not just
+     * a pile of passages. Rule-based and fully offline; every answer is shown
+     * with the PMM sentence it came from.
+     * ==================================================================== */
+    var NUMW = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+      thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20 };
+    var NUMRX = '(?:\\d{1,3}|' + Object.keys(NUMW).join('|') + ')';
+    var SENT_CACHE = {};
+    function sentencesOf(c) {
+      if (SENT_CACHE[c.i]) return SENT_CACHE[c.i];
+      var out = [], parent = '';
+      c.t.split('\n').forEach(function (line) {
+        var isMark = /^\s*(\d{1,2}[.)]|[a-z][.)]|[ivx]{1,4}[.)]|[\u2022\-\u25cf])\s/.test(line);
+        var clean = line.replace(/\s+/g, ' ').trim();
+        if (!isMark && /:\s*$/.test(clean)) parent = clean; else if (!isMark) parent = '';
+        line.replace(/([.;!?])\s+(?=[A-Z0-9(])/g, '$1\u0001').split('\u0001').forEach(function (x) {
+          x = x.replace(/\s+/g, ' ').trim(); if (x.length < 18) return;
+          if (isMark && parent && parent.length < 90 && !/^(policies|procedures|steps|the following)/i.test(parent) && !/this process/i.test(parent)) x = parent.replace(/:\s*$/, ':') + ' ' + x.replace(/^(\d{1,2}[.)]|[a-z][.)]|[ivx]{1,4}[.)]|[\u2022\-\u25cf])\s*/, '');
+          out.push(x);
+        });
+      });
+      return (SENT_CACHE[c.i] = out);
+    }
+    function ctxLabel(c) { return (c.h || '').replace(/^\d[\d.]*\s+(PMM-\S+\s*)?/, '').replace(/\s*\([^)]*\)\s*$/, '').trim(); }
+    function toNum(w) { w = String(w).toLowerCase(); return /^\d/.test(w) ? parseInt(w, 10) : NUMW[w]; }
+    function questionType(nq) {
+      if (/\b(how many|number of|how much)\b/.test(nq)) return 'count';
+      if (/\b(who|whom)\b/.test(nq) || /\bresponsible for\b/.test(nq)) return 'who';
+      if (/\bhow (long|often|soon|frequently)\b|\bwhen\b|\bdeadline\b|\btime limit\b|\bwithin how\b/.test(nq)) return 'when';
+      if (/^\s*(what is|what are|what does|define|meaning of|what do you mean)\b/.test(nq) && !/^\s*what are the (steps|stages|types|policies|requirements|deliverables|documents)\b/.test(nq)) return 'define';
+      if (/^\s*(is|are|can|could|must|should|does|do|shall|may|will|has|have)\b/.test(nq)) return 'yesno';
+      if (/\b(list|what are the|which|name the|types of|kinds of|steps (of|in|for)|stages of)\b/.test(nq)) return 'list';
+      return 'general';
+    }
+    function focusStemsFor(nq) {
+      var m = nq.match(/\b(?:how many|number of|how much)\s+(.+)$/); if (!m) return [];
+      var words = [], stopAt = /^(are|is|do|does|did|can|should|must|will|shall|there|in|of|for|to|per|within|during|exist|exists|have|has|be|been|required|needed|available|that|which)$/;
+      var ws = m[1].replace(/[?.!,]/g, '').split(/\s+/);
+      for (var i = 0; i < ws.length; i++) { if (stopAt.test(ws[i])) break; if (!STOP.has(ws[i])) words.push(ws[i]); if (words.length >= 3) break; }
+      return words.map(stem);
+    }
+    function plural(n, label) { return label.toLowerCase().replace(/\s+\d+$/, ''); }
+
+    function countCandidates(chunkIdx, focus, strict) {
+      var items = [], seen = {};
+      chunkIdx.forEach(function (ix) {
+        var c = chunks[ix], p = procOf(c);
+        // (1) enumerated labels such as "Stage Gate 1 ... Stage Gate 8"
+        var labels = {}, re = /([A-Z][A-Za-z&\-]*(?:\s[A-Z][A-Za-z&\-]*){0,3})\s(\d{1,2})\b/g, m;
+        while ((m = re.exec(c.t))) {
+          var lw = m[1].split(' '), lab = lw.slice(-2).join(' '), ls = contentStems(lab);
+          if (lw.length >= 2 && contentStems(lw[lw.length - 1]).every(function (x) { return focus.indexOf(x) < 0; })) { lab = lw[lw.length - 1]; ls = contentStems(lab); }
+          if (!ls.some(function (s) { return focus.indexOf(s) >= 0; })) continue;
+          (labels[lab] = labels[lab] || {})[parseInt(m[2], 10)] = 1;
+        }
+        Object.keys(labels).forEach(function (lab) {
+          var nums = Object.keys(labels[lab]).map(Number).sort(function (a, b) { return a - b; }), n = 0;
+          while (n < nums.length && nums[n] === n + 1) n++;
+          if (n >= 2 && n === nums.length) {
+            var key = 'e|' + n + '|' + lab + '|' + ctxLabel(c);
+            if (!seen[key]) { seen[key] = 1; items.push({ n: n, noun: lab.toLowerCase() + 's', ctx: ctxLabel(c), p: c.p, i: ix, kind: 'enum', quote: lab + ' 1 \u2026 ' + lab + ' ' + n, proc: p.id }); }
+          }
+        });
+        // (2) statements such as "consists of eight stages"
+        sentencesOf(c).forEach(function (s) {
+          var r = new RegExp('\\b(at least|minimum of|maximum of|up to|more than|at most)?\\s*(' + NUMRX + ')\\s+((?:[a-z\\-]+\\s+){0,2}?)([a-z\\-]{3,})\\b', 'ig'), mm;
+          while ((mm = r.exec(s))) {
+            var noun = mm[4], pre = s.slice(Math.max(0, mm.index - 12), mm.index).toLowerCase();
+            var before = s.charAt(Math.max(0, mm.index + mm[0].indexOf(mm[2]) - 1));
+            if (/[\w\-.\/]/.test(before) || /^0\d/.test(mm[2])) continue;
+            if (/(section|page|figure|table|stage|step|gate|item|point)\s*$/.test(pre) && /^\d/.test(mm[2])) continue;
+            if (focus.indexOf(stem(noun.toLowerCase())) < 0) continue;
+            var n2 = toNum(mm[2]); if (!n2) continue;
+            if (n2 < 2 && !/\b(only|single|one)\b/i.test(mm[0])) continue;
+            var key2 = 's|' + n2 + '|' + noun.toLowerCase() + '|' + ctxLabel(c);
+            if (!seen[key2]) { seen[key2] = 1; items.push({ n: n2, noun: noun.toLowerCase(), qual: (mm[1] || '').trim(), ctx: ctxLabel(c), p: c.p, i: ix, kind: 'stmt', quote: s, proc: p.id }); }
+          }
+        });
+      });
+      return items;
+    }
+
+    function answer(query, res) {
+      var nq = ' ' + norm(query).trim() + ' ';
+      var type = questionType(nq.trim());
+      if (type === 'general' && !/\?\s*$/.test(query.trim())) return null;
+      res = res || search(query);
+      if (!res.interp || !res.interp.concepts.length || res.direct) return null;
+      var C = res.interp.concepts;
+      var topIdx = []; res.groups.slice(0, 8).forEach(function (g) { g.items.slice(0, 6).forEach(function (it) { topIdx.push(it.i); }); });
+      if (!topIdx.length) return null;
+
+      /* --- count --- */
+      if (type === 'count') {
+        var fw = (nq.match(/\b(?:how many|number of|how much)\s+(.+)$/) || [0, ''])[1].replace(/[?.!,]/g, '').split(/\s+/), focus = [], primary = true;
+        var stopAt = /^(are|is|do|does|did|can|should|must|will|shall|there|in|of|for|to|per|within|during|exist|exists|have|has|be|been|required|needed|available|that|which|each|every|the|a|an)$/;
+        var fcount = 0;
+        for (var fi = 0; fi < fw.length && fcount < 3; fi++) {
+          if (stopAt.test(fw[fi])) { if (fcount) break; else continue; }
+          fcount++;
+          C.forEach(function (cn) { if (cn.raw === fw[fi]) cn.alts.forEach(function (a) { if (a.w >= 0.78 && a.stems.length === 1) focus.push(terms[a.stems[0]]); }); });
+        }
+        if (!focus.length) focus = C.map(function (c) { return stem(c.raw); });
+        var fids = focus.map(function (f) { return vocab.get(f); }).filter(function (x) { return x !== undefined; });
+        var pool = topIdx.slice();
+        for (var ci = 0; ci < N && pool.length < 400; ci++) { if (pool.indexOf(ci) < 0 && fids.some(function (t) { return docToks[ci].indexOf(t) >= 0; })) pool.push(ci); }
+        var items = countCandidates(pool, focus);
+        if (!items.length) { // fall back to the other words of the question (e.g. "stages")
+          focus = C.map(function (c) { return stem(c.raw); }); primary = false; items = countCandidates(pool, focus);
+        }
+        if (!items.length) return null;
+        // prefer enumerations (exact), then statements; keep one per context
+        var qs = C.map(function (c) { return stem(c.raw); });
+        items.forEach(function (it) { var ls = contentStems(it.noun + ' ' + it.ctx); it.cov = qs.filter(function (q) { return ls.indexOf(q) >= 0; }).length; });
+        items.sort(function (a, b) { return (b.cov - a.cov) || ((a.kind === 'enum' ? 0 : 1) - (b.kind === 'enum' ? 0 : 1)) || (pool.indexOf(a.i) - pool.indexOf(b.i)); });
+        var maxCov = items.length ? items[0].cov : 0; items = items.filter(function (it) { return it.cov === maxCov; });
+        var chosen = [], used = {};
+        items.forEach(function (it) { var k = it.ctx + '|' + it.n; if (!used[k] && chosen.length < 4) { used[k] = 1; chosen.push(it); } });
+        var same = chosen.every(function (x) { return x.n === chosen[0].n; });
+        var parts = chosen.map(function (x) { return x.n + ' ' + x.noun + (x.ctx ? ' (' + x.ctx + ')' : ''); });
+        var head = same && chosen.length > 1 ? chosen[0].n + ' ' + chosen[0].noun : parts.join('  \u00b7  ');
+        return { type: 'count', headline: head, note: primary ? '' : 'The PMM counts these differently from your wording; closest related counts shown.',
+          evidence: chosen.map(function (x) { return { i: x.i, p: x.p, text: x.quote, proc: x.proc, label: x.ctx }; }), confidence: primary ? 'high' : 'medium' };
+      }
+
+      /* --- sentence-level ranking for every other type --- */
+      var cands = [];
+      topIdx.forEach(function (ix, rank) {
+        var c = chunks[ix], p = procOf(c);
+        var headStems = new Set(contentStems((c.h || '') + ' ' + (p.pseudo ? '' : p.title)).map(function (s) { return vocab.get(s); }));
+        sentencesOf(c).forEach(function (s) {
+          var ids = new Set(); words(s).forEach(function (w) { if (!STOP.has(w)) { var t = vocab.get(stem(w)); if (t !== undefined) ids.add(t); } });
+          var hit = 0, sc = 0;
+          C.forEach(function (cn) {
+            var best = 0;
+            cn.alts.forEach(function (a) { if (a.stems.every(function (t) { return ids.has(t); })) best = Math.max(best, a.w * a.stems.reduce(function (z, t) { return z + idf(t); }, 0)); else if (a.stems.every(function (t) { return headStems.has(t); })) best = Math.max(best, a.w * 0.35 * a.stems.reduce(function (z, t) { return z + idf(t); }, 0)); });
+            if (best > 0) { hit++; sc += best; }
+          });
+          var cov = hit / C.length; if (cov < 0.5) return;
+          sc *= (0.35 + 0.65 * cov * cov);
+          if (type === 'when' && /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(calendar |working |business )?(days?|weeks?|months?|hours?|years?)\b|\b(monthly|weekly|quarterly|annual(ly)?|daily)\b/i.test(s)) sc *= 1.5;
+          if (type === 'who' && /\b(shall|responsible|is the|are the|approves?|chair)/i.test(s)) sc *= 1.3;
+          if (type === 'who' && /^\s*who (is|are)\b/.test(nq) && /\b(is|are) the [A-Z]/.test(s)) sc *= 1.5;
+          if (type === 'define' && /\b(is|are|means|refers to|defined as|consists of)\b/i.test(s)) sc *= 1.25;
+          if (type === 'yesno' && /\b(shall|must|should|not|may|cannot|only|required|prohibited)\b/i.test(s)) sc *= 1.25;
+          if (c.k === 'Workflow') sc *= 0.6;
+          sc *= 1 - Math.min(rank, 30) * 0.004;
+          cands.push({ s: s, sc: sc, cov: cov, i: ix, p: c.p, proc: p.id, label: p.pseudo ? p.title : p.title });
+        });
+      });
+      if (!cands.length) return null;
+      cands.sort(function (a, b) { return b.sc - a.sc; });
+      var top = cands.filter(function (x, k) { return k < 3 && x.sc >= cands[0].sc * 0.55; });
+      var s0 = top[0].s, headline = '';
+
+      if (type === 'when') {
+        var wantFreq = /how often|frequen/.test(nq), freqRx = /\b(monthly|weekly|quarterly|annual(ly)?|daily|every|each|per)\b/i;
+        var dm = (wantFreq && !freqRx.test(s0)) ? null : s0.match(/\b(at least|within|no later than|before|every|each|up to)?\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(calendar |working |business )?(days?|weeks?|months?|hours?|years?)\b|\b(monthly|weekly|quarterly|annual(?:ly)?|daily)\b/i);
+        if (dm) headline = dm[0].trim().replace(/^./, function (ch) { return ch.toUpperCase(); });
+      } else if (type === 'who') {
+        var m1 = s0.match(/^(?:The |A |An )?([A-Z][A-Za-z&\/\- ]{2,70}?)\s+(?:shall|must|is responsible|will|approves?|should)\b/);
+        var m2 = s0.match(/\b(?:is|are) the ([A-Z][A-Za-z&\/\- ]{2,70}?)(?:[.,;]|$)/);
+        var roles = []; top.forEach(function (x) { var q = x.s.match(/\b(?:is|are) the ([A-Z][A-Za-z&\/\- ]{2,70}?)(?:[.,;]|$)/); if (q && roles.indexOf(q[1].trim()) < 0 && roles.length < 2) roles.push(q[1].trim()); });
+        if (roles.length) headline = roles.join('  \u00b7  '); else if (m2) headline = m2[1].trim(); else if (m1) headline = m1[1].trim();
+      } else if (type === 'define') {
+        headline = s0.length > 230 ? s0.slice(0, 227) + '\u2026' : s0;
+      } else if (type === 'yesno') {
+        if (/\b(must not|shall not|not allowed|prohibited|cannot|may not)\b/i.test(s0)) headline = 'Not allowed \u2013 the PMM says:';
+        else if (/\b(shall|must|required|mandatory)\b/i.test(s0)) headline = 'Required \u2013 the PMM says:';
+        else headline = 'The PMM says:';
+      } else if (type === 'list') {
+        var c0 = chunks[top[0].i], lines = c0.t.split('\n').filter(function (l) { return /^\s*(\d{1,2}[.)]|[a-z][.)]|[\u2022\-])\s/.test(l); });
+        if (lines.length >= 2) { headline = lines.length + ' items'; return { type: 'list', headline: headline, items: lines.slice(0, 14).map(function (l) { return l.replace(/^\s*(\d{1,2}[.)]|[a-z][.)]|[\u2022\-])\s*/, ''); }),
+          evidence: [{ i: top[0].i, p: top[0].p, text: top[0].s, proc: top[0].proc, label: top[0].label }], confidence: top[0].cov === 1 ? 'high' : 'medium' }; }
+      }
+      return { type: type, headline: headline, evidence: top.map(function (x) { return { i: x.i, p: x.p, text: x.s, proc: x.proc, label: x.label }; }),
+        confidence: top[0].cov === 1 ? 'high' : 'medium' };
+    }
+
+    /* Top passages to hand to the on-device language model (or to show as sources). */
+    function passages(query, res, n) {
+      n = n || 4; res = res || search(query);
+      var all = []; (res.groups || []).slice(0, 8).forEach(function (g) { g.items.slice(0, 3).forEach(function (it) { all.push(it); }); });
+      all.sort(function (a, b) { return b.score - a.score; });
+      var perProc = {}, out = [];
+      all.forEach(function (it) {
+        if (out.length >= n) return;
+        var c = chunks[it.i], p = procOf(c); perProc[p.id] = (perProc[p.id] || 0) + 1; if (perProc[p.id] > 2) return;
+        var sents = sentencesOf(c), text = '', hl = new Set((res.hl || []));
+        var first = 0; for (var k = 0; k < sents.length; k++) { if (contentStems(sents[k]).some(function (x) { return hl.has(x); })) { first = k; break; } }
+        for (var j = first; j < sents.length && text.length < 620; j++) text += (text ? ' ' : '') + sents[j];
+        if (!text) text = c.t.slice(0, 620);
+        out.push({ i: it.i, p: c.p, proc: p.id, label: p.pseudo ? p.title : p.title, h: c.h || '', text: text });
+      });
+      return out;
+    }
+
     return {
-      search: search, suggest: suggest, interpret: interpret, related: related,
+      passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
       stem: stem, norm: norm, words: words,
       chunk: function (i) { return chunks[i]; },
       process: function (id) { return procById[id]; },

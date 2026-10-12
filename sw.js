@@ -1,6 +1,6 @@
 /* Offline cache so the installed web app keeps working without a connection. */
-const CACHE = 'pmm-coach-v1';
-const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'engine.js', 'pmm-index.js', 'manifest.webmanifest',
+const CACHE = 'pmm-coach-v2';
+const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'engine.js', 'llm.js', 'llm-worker.js', 'pmm-index.js', 'manifest.webmanifest',
   'img/welcome.png', 'img/listening.png', 'img/thinking.png', 'img/explaining.png', 'img/success.png', 'img/encourage.png',
   'img/hill-logo.png', 'img/icon-192.png', 'img/icon-512.png', 'img/favicon.png',
   'fonts/public-sans-latin-400-normal.woff2', 'fonts/public-sans-latin-500-normal.woff2', 'fonts/public-sans-latin-600-normal.woff2',
@@ -13,6 +13,7 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  if (new URL(e.request.url).origin !== self.location.origin) return;   // model downloads are cached by the AI runtime itself
   e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request).then(r => {
     const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); return r;
   }).catch(() => caches.match('index.html'))));

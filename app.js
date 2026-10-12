@@ -43,6 +43,7 @@
     open: 'M4 4h8v2H6v12h12v-6h2v8H4zm10 0h6v6h-2V7.4l-7.3 7.3-1.4-1.4L16.6 6H14z',
     mark: 'M6 3h12v18l-6-4-6 4z',
     clock: 'M12 2a10 10 0 100 20 10 10 0 000-20zm1 5v5.4l3.5 2.1-1 1.7L11 13V7z',
+    chat: 'M4 4h16v12H8l-4 4z',
     close: 'M6.4 5L12 10.6 17.6 5 19 6.4 13.4 12l5.6 5.6-1.4 1.4L12 13.4 6.4 19 5 17.6l5.6-5.6L5 6.4z'
   };
   function ico(n) { return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="' + IC[n] + '"/></svg>'; }
@@ -144,6 +145,7 @@
   function setState(st) { $('#shell').dataset.state = st; $('#filters').hidden = st !== 'results'; $('#home').hidden = st === 'results'; $('#results').hidden = st !== 'results'; $('#understood').hidden = st !== 'results' }
 
   function showHome() {
+    $('#answerBox').innerHTML = '';
     S.q = ''; S.literal = []; RES = null; setState('home'); $('#understood').hidden = true;
     setPose('welcome', 'How can I help you today?'); renderHome();
   }
@@ -153,7 +155,9 @@
     if (q.trim().length < 1) { showHome(); return; }
     var my = ++S.seq;
     var res = engine.search(q, { literal: S.literal.length ? S.literal : false, requirementsOnly: S.req, kind: S.kind, section: S.sec ? +S.sec : 0 });
-    RES = res; hlStems = res.hl || []; S.expanded = {}; S.showGroups = 10;
+    RES = res; hlStems = res.hl || []; S.expanded = {};
+    try { res.ans = engine.answer(q, res); } catch (e) { res.ans = null; }
+    S.showGroups = res.ans ? 3 : 10;
     setState('results');
     renderUnderstood(res); renderResults(res);
     // coach: show "thinking" briefly, then settle on the outcome
@@ -170,6 +174,7 @@
       var unk = res.interp && res.interp.unknown && res.interp.unknown[0];
       return setPose('encourage', unk ? 'I couldn\u2019t match \u201c' + esc(unk) + '\u201d. Let\u2019s make progress together \u2013 try another word.' : 'Let\u2019s make progress together! Try fewer or different words.');
     }
+    if (res.ans && res.ans.headline && res.ans.type !== 'yesno') return setPose('explaining', 'Here\u2019s what the PMM says: <b>' + esc(res.ans.headline.length > 90 ? res.ans.headline.slice(0, 88) + '\u2026' : res.ans.headline) + '</b>');
     if (res.confidence === 'low') return setPose('encourage', 'Only part of your search matched. Let\u2019s make progress together \u2013 check what\u2019s missing below.');
     var g = res.groups[0];
     setPose('explaining', 'Found <b>' + res.total + '</b> match' + (res.total === 1 ? '' : 'es') + ' in <b>' + n + '</b> process' + (n === 1 ? '' : 'es') + '. Start with <b>' + esc(g.title) + '</b>.');
@@ -213,7 +218,7 @@
     res.groups.slice(0, 8).forEach(function (g) { bySec[g.section] = (bySec[g.section] || 0) + g.count; tot += g.count; });
     var secs = Object.keys(bySec).sort(function (a, b) { return bySec[b] - bySec[a]; });
     var g0 = res.groups[0], g2 = res.groups[2];
-    if (!S.sec && secs.length >= 3 && g2 && g2.score > g0.score * 0.6 && !res.direct) {
+    if (!S.sec && !res.ans && secs.length >= 3 && g2 && g2.score > g0.score * 0.6 && !res.direct) {
       var titles = {}; engine.sections().forEach(function (s) { titles[s.n] = s.title; });
       h += '<div class="clarify"><div class="row"><span class="lead">This touches several areas. Which one do you mean?</span></div><div class="row">' + secs.slice(0, 5).map(function (n) {
         return '<button class="chip" type="button" data-sec="' + n + '">' + esc((titles[n] || 'Section ' + n).replace(/^Project /, '')) + ' <span style="color:var(--muted)">' + bySec[n] + '</span></button>';
@@ -238,17 +243,31 @@
     return h;
   }
 
+  function answerHTML(a) {
+    var h = '<section class="answer" aria-label="Answer"><div class="a-tag">' + (a.headline ? 'Answer' : 'Closest statements in the PMM') + '</div>';
+    if (a.headline) h += '<p class="a-main">' + esc(a.headline) + '</p>';
+    if (a.note) h += '<p class="a-note">' + esc(a.note) + '</p>';
+    if (a.items) h += '<ol class="a-list">' + a.items.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ol>';
+    h += '<ul class="a-ev">' + a.evidence.map(function (e) {
+      return '<li><span class="a-q">' + engine.highlight(e.text.length > 360 ? e.text.slice(0, 357) + '\u2026' : e.text, hlStems) + '</span><span class="a-src">' + esc(e.proc && e.proc.indexOf('SEC-') !== 0 ? e.proc + ' \u00b7 ' : '') + 'p.' + e.p +
+        ' <button type="button" class="linkbtn" data-ctx="' + esc(e.proc) + '" data-focus="' + e.i + '">Open in context</button></span></li>';
+    }).join('') + '</ul><p class="a-note">Best fit from the manual\u2019s wording. Confirm on the page before you rely on it. <button type="button" class="linkbtn" data-chat>Ask the Coach about this</button></p></section>';
+    return h;
+  }
+
   function renderResults(res) {
     var el = $('#results'), h = '';
     var active = S.req || S.kind || S.sec;
     if (!res.total) {
+      $('#answerBox').innerHTML = '';
       h = '<div class="empty"><h3>' + (active ? 'No match with these filters' : 'No match for \u201c' + esc(S.q.trim()) + '\u201d') + '</h3>' +
         '<p>' + (active ? 'Try removing a filter, or search with fewer words.' : 'Use the key topic words, such as \u201crisk register\u201d. An abbreviation or its full name both work. I fix typos and ignore word order.') + '</p>' +
         (active ? '<p><button class="linkbtn" type="button" data-clear-filters>Clear filters</button></p>' : '') +
         '<div class="chips" style="margin-top:.8rem">' + TOPICS.slice(0, 6).map(function (t, i) { return '<button class="chip" type="button" data-topic="' + i + '">' + esc(t.t) + '</button>'; }).join('') + '</div></div>';
       el.innerHTML = h; return;
     }
-    h += '<div class="summary" aria-live="polite"><span>' + res.total + ' match' + (res.total === 1 ? '' : 'es') + ' in ' + res.groups.length + ' process' + (res.groups.length === 1 ? '' : 'es') + '</span>' +
+    $('#answerBox').innerHTML = res.ans ? answerHTML(res.ans) : '';
+    h += (res.ans ? '<h2 class="rel">Related passages</h2>' : '') + '<div class="summary" aria-live="polite"><span>' + res.total + ' match' + (res.total === 1 ? '' : 'es') + ' in ' + res.groups.length + ' process' + (res.groups.length === 1 ? '' : 'es') + '</span>' +
       (active ? '<button type="button" class="linkbtn" data-clear-filters>Clear filters</button>' : '<span>' + res.took + ' ms</span>') + '</div>';
     res.groups.slice(0, S.showGroups).forEach(function (g, gi) {
       var open = S.expanded[g.id], lim = open ? 15 : 3, items = g.items.slice(0, lim);
@@ -329,6 +348,83 @@
     });
   }
 
+
+  /* ---------- chat ("Ask the Coach") ---------- */
+  var CHAT = { msgs: [], busy: false, lastQ: '' };
+  var WORDNUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+  function chatSystemPrompt() {
+    return 'You are PMM Coach, an assistant for the NWC Project Management Manual (PMM). Answer ONLY from the numbered passages provided. ' +
+      'Be brief: at most four sentences. Cite the passages you used like [1] or [2]. If the passages do not contain the answer, say exactly: I could not find this in the PMM. ' +
+      'Never invent numbers, roles or deadlines.';
+  }
+  function buildMessages(q, ps, ans) {
+    var ctx = ps.map(function (p, k) { return '[' + (k + 1) + '] (' + (p.proc.indexOf('SEC-') === 0 ? 'PMM' : p.proc) + ', p.' + p.p + ') ' + p.text; }).join('\n\n');
+    var hint = ans && ans.headline && ans.type !== 'yesno' ? 'Verified finding from the manual: ' + ans.headline + '\n\n' : '';
+    var hist = CHAT.msgs.filter(function (m) { return m.role === 'user' || (m.role === 'coach' && m.plain); }).slice(-4, -1).map(function (m) { return { role: m.role === 'user' ? 'user' : 'assistant', content: m.plain || m.text }; });
+    return [{ role: 'system', content: chatSystemPrompt() }].concat(hist, [{ role: 'user', content: hint + 'Passages:\n' + ctx + '\n\nQuestion: ' + q }]);
+  }
+  function numbersCheck(answer, ps, ans) {
+    var src = (ps.map(function (p) { return p.text; }).join(' ') + ' ' + (ans && ans.headline || '')).toLowerCase();
+    Object.keys(WORDNUM).forEach(function (w) { src = src.replace(new RegExp('\\b' + w + '\\b', 'g'), String(WORDNUM[w])); });
+    var txt = answer.replace(/\[\d+\]/g, ' ').toLowerCase();
+    Object.keys(WORDNUM).forEach(function (w) { txt = txt.replace(new RegExp('\\b' + w + '\\b', 'g'), String(WORDNUM[w])); });
+    var bad = []; (txt.match(/\b\d+(?:\.\d+)?\b/g) || []).forEach(function (n) { if (!new RegExp('(^|[^\\d.])' + n.replace('.', '\\.') + '([^\\d]|$)').test(src) && bad.indexOf(n) < 0) bad.push(n); });
+    return bad;
+  }
+  function citeHTML(text, ps) {
+    return esc(text).replace(/\[(\d+)\]/g, function (m, n) { var p = ps[+n - 1]; return p ? '<button type="button" class="cite" data-ctx="' + esc(p.proc) + '" data-focus="' + p.i + '" title="p.' + p.p + '">' + n + '</button>' : m; })
+      .split(/\n+/).map(function (l) { return '<p>' + l + '</p>'; }).join('');
+  }
+  function srcHTML(ps) { return ps.length ? '<div class="src">' + ps.map(function (p, k) { return '<button type="button" data-ctx="' + esc(p.proc) + '" data-focus="' + p.i + '">' + (k + 1) + ' \u00b7 ' + esc(p.proc.indexOf('SEC-') === 0 ? 'Section ' + p.proc.slice(4) : p.proc) + ' \u00b7 p.' + p.p + '</button>'; }).join('') + '</div>' : ''; }
+  function addMsg(role, html, pose) {
+    var log = $('#chatLog'); var d = document.createElement('div'); d.className = 'msg ' + role;
+    d.innerHTML = role === 'user' ? '<div class="bub">' + html + '</div>' : '<img class="ava" src="' + POSE[pose || 'explaining'] + '" alt=""><div class="bub">' + html + '</div>';
+    log.appendChild(d); log.parentElement.scrollTop = log.parentElement.scrollHeight; return d;
+  }
+  function fallbackReply(ans, ps) {
+    var h = '';
+    if (ans && ans.headline) h += '<div class="big">' + esc(ans.headline) + '</div>';
+    var ev = ans ? ans.evidence : [];
+    if (ev.length) h += ev.slice(0, 2).map(function (e) { return '<div class="quote">' + esc(e.text.length > 300 ? e.text.slice(0, 297) + '\u2026' : e.text) + ' <span style="color:var(--muted)">p.' + e.p + '</span></div>'; }).join('');
+    else if (ps.length) h += '<p>The closest passages in the manual:</p>' + ps.slice(0, 2).map(function (p) { return '<div class="quote">' + esc(p.text.length > 300 ? p.text.slice(0, 297) + '\u2026' : p.text) + ' <span style="color:var(--muted)">p.' + p.p + '</span></div>'; }).join('');
+    return h;
+  }
+  function chatAsk(q) {
+    if (CHAT.busy || !q.trim()) return;
+    CHAT.busy = true; CHAT.msgs.push({ role: 'user', text: q }); addMsg('user', esc(q));
+    var words = engine.words(q).filter(function (w) { return w.length > 2; });
+    var qq = words.length < 3 && CHAT.lastQ ? CHAT.lastQ + ' ' + q : q; CHAT.lastQ = qq;
+    var res = engine.search(qq), ans = null, ps = [];
+    try { ans = engine.answer(qq, res); ps = engine.passages(qq, res, 4); } catch (e) {}
+    hlStems = res.hl || [];
+    var node = addMsg('coach', '<span class="typing"><i></i><i></i><i></i></span>', 'thinking'); var bub = node.querySelector('.bub'), img = node.querySelector('.ava');
+    function finish(html, plain, pose) { bub.innerHTML = html; img.src = POSE[pose || 'explaining']; CHAT.msgs.push({ role: 'coach', text: html, plain: plain }); CHAT.busy = false; $('#chatLog').parentElement.scrollTop = 1e6; }
+    if (!ps.length && !(ans && ans.evidence.length)) { return finish('<p>I could not find this in the PMM. Try different words, or name the process or topic.</p>', '', 'encourage'); }
+    if (!(window.PMMLLM && PMMLLM.ready())) {
+      var tip = PMMLLM && PMMLLM.enabled && PMMLLM.enabled() ? 'The on-device AI is still starting.' : 'Turn on the on-device AI in Settings for answers in plain words.';
+      return finish(fallbackReply(ans, ps) + srcHTML(ans && ans.evidence.length ? ans.evidence : ps) + '<div class="tip">' + tip + '</div>', ans && ans.headline || '', ans && ans.headline ? 'success' : 'explaining');
+    }
+    var acc = '';
+    PMMLLM.ask(buildMessages(q, ps, ans), function (t) { acc += t; bub.innerHTML = citeHTML(acc, ps); $('#chatLog').parentElement.scrollTop = 1e6; })
+      .then(function (full) {
+        full = (full || acc).trim(); var bad = numbersCheck(full, ps, ans);
+        var html = citeHTML(full, ps) + srcHTML(ps) + (bad.length ? '<div class="warn">Check the number' + (bad.length > 1 ? 's' : '') + ' ' + bad.map(esc).join(', ') + ' against the cited pages. It does not appear in the passages I used.</div>' : '');
+        finish(html, full, bad.length ? 'encourage' : 'success');
+      })
+      .catch(function (err) { finish(fallbackReply(ans, ps) + srcHTML(ps) + '<div class="warn">The on-device AI could not answer (' + esc(err.message) + '). Showing the closest passages instead.</div>', '', 'encourage'); });
+  }
+  function openChat(prefill) {
+    var h = '<div class="d-head"><h2 id="drawerTitle">Ask the Coach</h2><button class="icon-btn close" type="button" data-close aria-label="Close">' + ico('close') + '</button></div>' +
+      '<div class="d-body"><div class="chat-log" id="chatLog"></div></div>' +
+      '<form class="chat-form" id="chatForm" autocomplete="off"><label class="sr" for="chatQ">Your question</label><input id="chatQ" type="text" placeholder="Ask about the PMM in your own words" enterkeyhint="send"><button class="btn primary" type="submit">Send</button></form>';
+    var el = openLayer('#drawer', h);
+    if (!CHAT.msgs.length) CHAT.msgs.push({ role: 'coach', text: '<p>Ask me about any requirement in the PMM, such as <b>how many stage gates are there</b> or <b>who approves a variation order</b>. I answer from the manual and show the pages.</p>' + (PMMLLM && PMMLLM.ready() ? '' : '<div class="tip">On-device AI is off, so I will show the closest statements. You can turn it on in Settings.</div>'), plain: '' });
+    CHAT.msgs.forEach(function (m) { if (m.role === 'user') addMsg('user', esc(m.text)); else addMsg('coach', m.text, 'welcome'); });
+    $('#chatForm', el).addEventListener('submit', function (e) { e.preventDefault(); var i = $('#chatQ', el), v = i.value; i.value = ''; chatAsk(v); });
+    var qi = $('#chatQ', el); if (prefill) { qi.value = prefill; } setTimeout(function () { qi.focus(); }, 60);
+    setPose('listening', 'I\u2019m listening.');
+  }
+
   /* ---------- settings & saved sheets ---------- */
   function seg(name, opts, cur) { return '<div class="seg" data-seg="' + name + '">' + opts.map(function (o) { return '<button type="button" data-v="' + o[0] + '" aria-pressed="' + (o[0] === cur) + '">' + o[1] + '</button>'; }).join('') + '</div>'; }
   function openSettings() {
@@ -340,12 +436,29 @@
       h += '<div class="s-row"><div class="l"><b>Open when I sign in</b><span>Keeps the coach on standby in the tray</span></div>' + seg('login', [['1', 'On'], ['0', 'Off']], pr.openAtLogin ? '1' : '0') + '</div>';
       h += '<div class="s-row"><div class="l"><b>Summon shortcut</b><span>' + esc(pr.shortcut || 'Ctrl+Alt+P') + ' shows or hides the coach from anywhere</span></div></div>';
     }
+
+    var L = window.PMMLLM, st = L ? L.state() : { phase: 'off' }, ck = L ? L.chosen() : 'standard';
+    if (L) {
+      h += '<div class="s-row" style="display:block"><div class="l"><b>On-device AI answers</b><span>Writes short answers from the manual in plain words. Runs on this device; the manual\u2019s text never leaves it. Downloads the model once, then works offline. Best on a computer: phones are slow.</span></div>' +
+        '<div style="margin:.6rem 0">' + seg('ai', [['1', 'On'], ['0', 'Off']], L.enabled() ? '1' : '0') + '</div>' +
+        '<div style="margin:.4rem 0">' + seg('aimodel', [['light', 'Light'], ['standard', 'Standard'], ['better', 'Better']], ck) + '</div>' +
+        '<div class="ai-status" id="aiModelNote">' + esc(L.MODELS[ck].label) + (L.gpu() ? '' : '. This browser has no graphics acceleration, so Better is not available.') + '</div>' +
+        '<div class="bar" id="aiBar" hidden><i></i></div><div class="ai-status" id="aiStatus"></div>' +
+        '<div style="margin-top:.6rem;display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn primary" type="button" data-ai-load>Download and start</button><button class="btn danger" type="button" data-ai-remove>Remove downloaded model</button></div></div>';
+    }
     h += '<div class="s-row"><div class="l"><b>PMM content</b><span>' + esc((m.doc || 'PMM') + ' ' + (m.ver || '') + ' \u00b7 ' + (m.ref || '') + ' \u00b7 issued ' + (m.issued || '?') + '<br>' + (m.chunks || 0) + ' searchable passages from ' + (m.pages || '?') + ' pages \u00b7 indexed ' + (m.built || '?')) + '</span></div></div>';
     h += '<div class="s-row"><div class="l"><b>Load a PMM index file</b><span>Use this when a new PMM issue is released. Your PMO team supplies the file.</span></div><button class="btn" type="button" data-import>Choose file</button></div>';
     if (S.imported) h += '<div class="s-row"><div class="l"><b>Using an imported index</b><span>Switch back to the one packaged with the app</span></div><button class="btn" type="button" data-reset-index>Reset</button></div>';
     h += '<div class="s-row"><div class="l"><b>History and saved items</b><span>Stored only on this device</span></div><button class="btn danger" type="button" data-wipe>Clear</button></div>';
     h += '<p class="note">PMM Coach ' + APP_VERSION + ' is a search aid. The controlled PMM document remains the authority; always confirm a requirement against it before you rely on it. Everything runs on this device and nothing you type is sent anywhere.</p></div>';
-    openLayer('#sheet', h);
+    openLayer('#sheet', h); paintAI();
+  }
+  function paintAI() {
+    var L = window.PMMLLM, s = $('#aiStatus'); if (!L || !s) return; var st = L.state(), bar = $('#aiBar');
+    var txt = { off: L.enabled() ? 'Not started. Press Download and start.' : 'Off.', downloading: 'Preparing the model\u2026', ready: 'Ready. Answers are generated on this device.', error: st.error }[st.phase] || '';
+    if (st.phase === 'downloading' && st.total) txt = 'Downloading ' + Math.round(st.loaded / 1048576) + ' of ' + Math.round(st.total / 1048576) + ' MB (once only)';
+    s.textContent = txt; s.className = 'ai-status' + (st.phase === 'error' ? ' err' : '');
+    bar.hidden = st.phase !== 'downloading'; if (st.total) $('i', bar).style.width = Math.min(100, Math.round(st.loaded / st.total * 100)) + '%';
   }
   function openSaved() {
     var l = savedList();
@@ -394,6 +507,7 @@
     $('#fSec').addEventListener('change', function (e) { S.sec = e.target.value; runSearch(false); });
 
     $('#btnSettings').addEventListener('click', openSettings);
+    $('#btnChat').addEventListener('click', function () { openChat(''); });
     $('#btnSaved').addEventListener('click', openSaved);
     $('#scrim').addEventListener('click', closeLayers);
     document.addEventListener('keydown', function (e) {
@@ -441,8 +555,13 @@
         var name = t.parentElement.dataset.seg, v = d.v;
         $$('button', t.parentElement).forEach(function (b) { b.setAttribute('aria-pressed', b === t); });
         if (name === 'theme' || name === 'size') { LS.set(name, v); applyPrefs(); }
+        if (name === 'ai' && window.PMMLLM) { PMMLLM.setEnabled(v === '1'); paintAI(); }
+        if (name === 'aimodel' && window.PMMLLM) { PMMLLM.choose(v); var nn = $('#aiModelNote'); if (nn) nn.textContent = PMMLLM.MODELS[v].label; }
         if (name === 'login' && desktop) { desktop.setPrefs({ openAtLogin: v === '1' }); desktop.prefs = Object.assign({}, desktop.prefs, { openAtLogin: v === '1' }); }
       }
+      else if (d.chat != null) { openChat(S.q); }
+      else if (d.aiLoad != null) { PMMLLM.setEnabled(true); PMMLLM.load(); paintAI(); }
+      else if (d.aiRemove != null) { PMMLLM.remove().then(function () { try { localStorage.removeItem('pmmc.aiDownloaded'); } catch (e) {} toast('Downloaded model removed'); paintAI(); }); }
       else if (d.import != null) { $('#fileIdx').click(); }
       else if (d.resetIndex != null) { IDB.del('index').then(function () { location.reload(); }); }
       else if (d.wipe != null) { LS.set('recent', []); LS.set('saved', []); updateSavedCount(); toast('History and saved items cleared'); if (!RES) renderHome(); }
@@ -473,6 +592,11 @@
     engine = PMMEngine.create(index); meta = engine.meta();
     var sel = $('#fSec'); engine.sections().forEach(function (s) { var o = document.createElement('option'); o.value = s.n; o.textContent = s.n + '. ' + s.title.replace(/^Project /, ''); sel.appendChild(o); });
     bind(); updateSavedCount(); setState('home'); renderHome();
+    if (window.PMMLLM) {
+      PMMLLM.on(function (st) { if (st.phase === 'ready') { try { localStorage.setItem('pmmc.aiDownloaded', '1'); } catch (e) {} } paintAI(); });
+      var was = false; try { was = localStorage.getItem('pmmc.aiDownloaded') === '1'; } catch (e) {}
+      if (PMMLLM.enabled() && was) PMMLLM.load();
+    }
     if ('serviceWorker' in navigator && /^https?:/.test(location.protocol) && !window.Capacitor) navigator.serviceWorker.register('sw.js').catch(function () {});
     var url = new URLSearchParams(location.search).get('q'); if (url) { $('#q').value = url; $('#btnClear').hidden = false; runSearch(true); }
   }
