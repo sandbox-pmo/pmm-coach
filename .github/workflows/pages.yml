@@ -23,7 +23,7 @@ jobs:
       - name: Assemble site (adds the on-device AI runtime from npm)
         run: |
           mkdir -p site/vendor
-          cp -r index.html styles.css app.js engine.js llm.js llm-worker.js sw.js manifest.webmanifest img fonts .nojekyll site/
+          cp -r index.html styles.css app.js engine.js llm.js llm-worker.js sw.js manifest.webmanifest pmm-index.enc img fonts .nojekyll site/
           cp vendor/TRANSFORMERS-LICENSE.txt site/vendor/
           mkdir -p /tmp/rt && cd /tmp/rt && npm init -y >/dev/null && npm install --ignore-scripts --no-audit --no-fund @huggingface/transformers@4.3.1
           cp node_modules/@huggingface/transformers/dist/transformers.min.js "$GITHUB_WORKSPACE/site/vendor/transformers.bundle.js"

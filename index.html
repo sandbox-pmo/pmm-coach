@@ -9,7 +9,11 @@
 <title>PMM Coach</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="img/favicon.png">
-<link rel="apple-touch-icon" href="img/icon-192.png">
+<link rel="apple-touch-icon" href="img/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="PMM Coach">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -28,6 +32,9 @@
       <button class="icon-btn" id="btnPin" type="button" hidden aria-pressed="false" title="Keep on top of other windows">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3l7 7-3 1-3.5 3.5.5 4.5-2 .5-3.5-3.5L5 20l-1-1 4.5-4.5L5 11l.5-2 4.5.5L13.500 6z"/></svg>
         <span class="sr">Keep on top</span>
+      </button>
+      <button class="icon-btn" id="btnInstall" type="button" title="Install PMM Coach" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v9.2l3.300-3.300 1.400 1.400L12 16 6.300 10.300l1.400-1.400L11 12.200zM5 18h14v2H5z"/></svg><span class="sr">Install PMM Coach</span>
       </button>
       <button class="icon-btn" id="btnChat" type="button" title="Ask the Coach (chat)">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H8l-4 4z"/></svg><span class="sr">Ask the Coach</span>

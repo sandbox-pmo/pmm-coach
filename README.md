@@ -2,6 +2,8 @@
 
 Search the Project Management Manual in your own words, or ask the Coach a question. Typos, word order and abbreviations are fine.
 
-This site contains **no manual content**. On first use, open Settings > Load a PMM index file and choose the index file supplied by your PMO team. It is stored only in your browser and the app then works offline. On iPhone, use Share > Add to Home Screen so the browser keeps it.
+**Install:** open the app link your PMO team gave you, then use the install button (Android, Windows) or Share > Add to Home Screen (iPhone).
 
-Optional: Settings > On-device AI answers downloads a small language model once and writes short answers from the manual on your own device. The AI runtime is added from npm when the site is published.
+The manual is stored in this site **encrypted**. It can only be opened with the access code, which is shared privately inside NWC. Nothing is readable without it.
+
+Optional: Settings > On-device AI answers downloads a small language model once and writes short answers from the manual on your own device.

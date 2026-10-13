@@ -62,6 +62,7 @@
     if (p === pose) return;
     var a = $('#avA'), b = $('#avB'), cur = curImg === 'A' ? a : b, nxt = curImg === 'A' ? b : a;
     nxt.src = POSE[p]; nxt.classList.remove('off'); cur.classList.add('off');
+    $('#avatar').classList.toggle('busy', p === 'thinking');
     curImg = curImg === 'A' ? 'B' : 'A'; pose = p;
   }
   function celebrate(msg) {
@@ -126,7 +127,7 @@
   function renderHome() {
     var secs = engine.sections(), procs = engine.processes();
     var rec = recents();
-    var h = '<div class="h-sec"><h2>Start with a topic</h2><div class="topics">' + TOPICS.map(function (t, i) {
+    var h = '<div class="h-sec" id="installTile"' + (isStandalone() ? ' hidden' : '') + '><button class="topic" type="button" data-install-open style="width:100%"><span class="t-ic"><img src="img/favicon.png" alt="" width="28" height="28"></span><span class="t-txt"><b>Install PMM Coach</b><span class="t-d">Add it to your phone or Windows taskbar for one-tap access</span></span></button></div>' + '<div class="h-sec"><h2>Start with a topic</h2><div class="topics">' + TOPICS.map(function (t, i) {
       return '<button class="topic" type="button" data-topic="' + i + '"><span class="t-ic">' + ico(t.ic) + '</span><span class="t-txt"><b>' + esc(t.t) + '</b><span class="t-d">' + esc(t.d) + '</span></span></button>';
     }).join('') + '</div></div>';
     h += '<div class="h-sec"><h2>Try asking</h2><div class="ask">' + ASK.map(function (a) { return '<button type="button" data-ask="' + esc(a) + '">' + esc(a.replace(/[?]$/, '')) + '</button>'; }).join('') + '</div></div>';
@@ -448,7 +449,7 @@
     }
     h += '<div class="s-row"><div class="l"><b>PMM content</b><span>' + esc((m.doc || 'PMM') + ' ' + (m.ver || '') + ' \u00b7 ' + (m.ref || '') + ' \u00b7 issued ' + (m.issued || '?') + '<br>' + (m.chunks || 0) + ' searchable passages from ' + (m.pages || '?') + ' pages \u00b7 indexed ' + (m.built || '?')) + '</span></div></div>';
     h += '<div class="s-row"><div class="l"><b>Load a PMM index file</b><span>Use this when a new PMM issue is released. Your PMO team supplies the file.</span></div><button class="btn" type="button" data-import>Choose file</button></div>';
-    if (S.imported) h += '<div class="s-row"><div class="l"><b>Using an imported index</b><span>Switch back to the one packaged with the app</span></div><button class="btn" type="button" data-reset-index>Reset</button></div>';
+    if (S.imported) h += '<div class="s-row"><div class="l"><b>Stored copy of the manual</b><span>Remove it. You will need the access code again.</span></div><button class="btn" type="button" data-reset-index>Reset</button></div>';
     h += '<div class="s-row"><div class="l"><b>History and saved items</b><span>Stored only on this device</span></div><button class="btn danger" type="button" data-wipe>Clear</button></div>';
     h += '<p class="note">PMM Coach ' + APP_VERSION + ' is a search aid. The controlled PMM document remains the authority; always confirm a requirement against it before you rely on it. Everything runs on this device and nothing you type is sent anywhere.</p></div>';
     openLayer('#sheet', h); paintAI();
@@ -475,6 +476,7 @@
 
   /* ---------- events ---------- */
   function bind() {
+    if (bind.done) return; bind.done = true;
     var q = $('#q');
     q.addEventListener('focus', function () { if (!q.value) { renderSugg(recents().slice(0, 5).map(function (r) { return { type: 'recent', label: r, sub: 'Recent search' }; })); } setPose(pose === 'welcome' || pose === 'listening' ? 'listening' : pose, pose === 'welcome' ? 'I\u2019m listening.' : null); });
     q.addEventListener('input', function () {
@@ -508,6 +510,7 @@
 
     $('#btnSettings').addEventListener('click', openSettings);
     $('#btnChat').addEventListener('click', function () { openChat(''); });
+    $('#btnInstall').addEventListener('click', openInstall);
     $('#btnSaved').addEventListener('click', openSaved);
     $('#scrim').addEventListener('click', closeLayers);
     document.addEventListener('keydown', function (e) {
@@ -560,6 +563,10 @@
         if (name === 'login' && desktop) { desktop.setPrefs({ openAtLogin: v === '1' }); desktop.prefs = Object.assign({}, desktop.prefs, { openAtLogin: v === '1' }); }
       }
       else if (d.chat != null) { openChat(S.q); }
+      else if (d.installOpen != null) { openInstall(); }
+      else if (d.doInstall != null) { if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.then(function () { deferredPrompt = null; refreshInstallUI(); }); } }
+      else if (d.popup != null) { window.open(SITE_URL, 'pmmcoach_popup', 'popup=yes,width=480,height=780,left=80,top=60'); }
+      else if (d.copyLink != null) { copyText(SITE_URL).then(function () { toast('Link copied'); }); }
       else if (d.aiLoad != null) { PMMLLM.setEnabled(true); PMMLLM.load(); paintAI(); }
       else if (d.aiRemove != null) { PMMLLM.remove().then(function () { try { localStorage.removeItem('pmmc.aiDownloaded'); } catch (e) {} toast('Downloaded model removed'); paintAI(); }); }
       else if (d.import != null) { $('#fileIdx').click(); }
@@ -581,6 +588,74 @@
   }
   function markSugg() { $$('#sugg li').forEach(function (li, i) { li.setAttribute('aria-selected', i === S.suggestIdx); if (i === S.suggestIdx) { li.scrollIntoView({ block: 'nearest' }); $('#q').setAttribute('aria-activedescendant', li.id); } }); }
 
+
+  /* ---------- access code (the manual is shipped encrypted on the public site) ---------- */
+  var SITE_URL = 'https://sandbox-pmo.github.io/pmm-coach/';
+  function b64(s) { var bin = atob(s), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+  function unlockWith(code) {
+    var norm = String(code).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return fetch('pmm-index.enc', { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error('missing'); return r.json(); }).then(function (enc) {
+      return crypto.subtle.importKey('raw', new TextEncoder().encode(norm), 'PBKDF2', false, ['deriveKey'])
+        .then(function (km) { return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(enc.salt), iterations: enc.iter, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']); })
+        .then(function (key) { return crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(enc.iv), additionalData: new TextEncoder().encode('pmm-coach-v1') }, key, b64(enc.data)); })
+        .then(function (plain) { return new Response(new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'))).text(); })
+        .then(function (txt) { return JSON.parse(txt); });
+    });
+  }
+  function codeFromLink() { var m = /[#&]k=([A-Za-z0-9\-]+)/.exec(location.hash || ''); return m ? m[1] : ''; }
+  function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function showUnlock(msg) {
+    S.locked = true; $('#searchForm').style.display = 'none'; setState('home');
+    $('#home').innerHTML = '<div class="unlock"><h2>Welcome to PMM Coach</h2><p>Enter the access code from your PMO team. You only need to do this once on this device.</p>' +
+      '<form id="unlockForm" autocomplete="off"><label class="sr" for="codeIn">Access code</label><input id="codeIn" type="text" inputmode="text" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX" maxlength="19">' +
+      '<button class="btn primary" type="submit">Unlock</button></form><p class="unlock-msg" id="unlockMsg" role="alert">' + esc(msg || '') + '</p>' +
+      '<p class="note">Have an index file instead? <button type="button" class="linkbtn" data-import>Choose file</button></p></div>';
+    setPose('welcome', 'Welcome! I just need your access code once.');
+    $('#unlockForm').addEventListener('submit', function (e) { e.preventDefault(); var v = $('#codeIn').value; if (v.replace(/[^A-Za-z0-9]/g, '').length < 12) { $('#unlockMsg').textContent = 'The code has 12 letters and numbers.'; return; } doUnlock(v); });
+    bind();
+  }
+  function doUnlock(code) {
+    var m = $('#unlockMsg'); if (m) m.textContent = 'Unlocking\u2026'; setPose('thinking', 'Let me check that.');
+    unlockWith(code).then(function (idx) {
+      if (!idx || !idx.chunks) throw new Error('bad');
+      return IDB.set('index', idx).catch(function () {}).then(function () {
+        if (!isIOS()) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+        S.locked = false; $('#searchForm').style.display = ''; start(idx, true);
+      });
+    }).catch(function () { showUnlock('That code did not work. Check it and try again, or ask your PMO team for the link.'); setPose('encourage', 'Let\u2019s try that again.'); });
+  }
+
+  /* ---------- install (Android, iPhone, Windows) ---------- */
+  var deferredPrompt = null;
+  function isStandalone() { return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true || !!window.pmmDesktop || !!window.Capacitor; }
+  function platform() { var ua = navigator.userAgent; if (isIOS()) return 'ios'; if (/Android/.test(ua)) return 'android'; if (/Windows/.test(ua)) return 'windows'; return 'other'; }
+  function refreshInstallUI() { var b = $('#btnInstall'); if (b) b.hidden = isStandalone(); var t = $('#installTile'); if (t) t.hidden = isStandalone(); }
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferredPrompt = e; refreshInstallUI(); });
+  window.addEventListener('appinstalled', function () { deferredPrompt = null; refreshInstallUI(); toast('PMM Coach installed'); closeLayers(); });
+  function steps(list) { return '<ol class="steps">' + list.map(function (s) { return '<li>' + s + '</li>'; }).join('') + '</ol>'; }
+  function openInstall() {
+    var p = platform(), btn = deferredPrompt ? '<p><button class="btn primary" type="button" data-do-install>Install PMM Coach</button></p>' : '';
+    var ios = steps(['Open this page in <b>Safari</b> (not inside another app).', 'Tap the <b>Share</b> button (the square with an arrow).', 'Scroll and tap <b>Add to Home Screen</b>, then <b>Add</b>.', 'Open PMM Coach from your home screen. The first time, use the private link from your PMO team so it unlocks.']);
+    var and = steps(['Open this page in <b>Chrome</b>.', 'Tap the menu <b>\u22ee</b>, then <b>Install app</b> (or <b>Add to Home screen</b>).', 'Tap <b>Install</b>. PMM Coach appears with your other apps.']);
+    var win = steps(['Open this page in <b>Microsoft Edge</b> or Chrome.', 'Edge: menu <b>\u2026</b> &gt; <b>Apps</b> &gt; <b>Install this site as an app</b>. Chrome: menu <b>\u22ee</b> &gt; <b>Cast, save and share</b> &gt; <b>Install page as app</b>.', 'Tick <b>Pin to taskbar</b> when asked. PMM Coach then opens in its own window from the taskbar.']);
+    function block(id, title, body) { return '<details class="inst"' + (p === id ? ' open' : '') + '><summary>' + title + '</summary>' + body + '</details>'; }
+    var h = '<div class="d-head"><h2 id="sheetTitle">Install PMM Coach</h2><button class="icon-btn close" type="button" data-close aria-label="Close">' + ico('close') + '</button></div><div class="d-body">' +
+      '<div class="inst-hero"><img src="img/icon-192.png" alt=""><p>Put the Coach on your phone or taskbar for one-tap access. It also works offline.</p></div>' + btn +
+      block('android', 'Android', and) + block('ios', 'iPhone and iPad', ios) + block('windows', 'Windows computer', win +
+        '<p><button class="btn" type="button" data-popup>Open as a popup window now</button></p>') +
+      '<div class="inst-share"><img src="img/qr.png" alt="QR code for the PMM Coach link" width="132" height="132"><div><b>Share the app</b><p class="note" style="margin:.2rem 0">Scan to open on a phone, or send this link:</p><button type="button" class="linkbtn" data-copy-link>' + esc(SITE_URL) + '</button></div></div></div>';
+    openLayer('#sheet', h);
+  }
+
+  /* ---------- the coach is always moving: gentle idle poses on the home screen ---------- */
+  var IDLE = [['welcome', 'How can I help you today?'], ['explaining', 'Try: how many stage gates are there?'], ['success', 'Typos and word order are fine. I\u2019ll find it.'], ['listening', 'I\u2019m listening. Ask me anything about the PMM.']], idleI = 0;
+  function startIdle() {
+    setInterval(function () {
+      if (document.hidden || S.locked || $('#shell').dataset.state !== 'home' || document.activeElement === $('#q') || !$('#sheet').hidden || !$('#drawer').hidden) return;
+      idleI = (idleI + 1) % IDLE.length; setPose(IDLE[idleI][0], IDLE[idleI][1]);
+    }, 4600);
+  }
+
   /* ---------- boot ---------- */
   function noIndex() {
     $('#home').innerHTML = '<div class="empty"><h3>Load the PMM to get started</h3><p>This copy of PMM Coach was installed without the manual\u2019s content. Ask your PMO team for the PMM index file (pmm-index.json), then choose it below.</p><p><button class="btn primary" type="button" data-import>Choose index file</button></p></div>';
@@ -600,13 +675,29 @@
     if ('serviceWorker' in navigator && /^https?:/.test(location.protocol) && !window.Capacitor) navigator.serviceWorker.register('sw.js').catch(function () {});
     var url = new URLSearchParams(location.search).get('q'); if (url) { $('#q').value = url; $('#btnClear').hidden = false; runSearch(true); }
   }
+  function afterStart() {
+    refreshInstallUI(); startIdle();
+    var qs = new URLSearchParams(location.search);
+    if (qs.get('chat')) openChat('');
+    if (qs.get('focus')) $('#q').focus();
+    if (location.hash === '#install') openInstall();
+    // installed desktop window: open at a compact "assistant" size once
+    if (window.matchMedia && matchMedia('(display-mode: standalone)').matches && !window.pmmDesktop && !window.Capacitor && !(matchMedia('(pointer:coarse)').matches) && !LS.get('sized', false)) {
+      try { window.resizeTo(480, 780); } catch (e) {} LS.set('sized', true);
+    }
+  }
   function boot() {
     applyPrefs();
     if (desktop && desktop.getPrefs) desktop.getPrefs().then(function (p) { desktop.prefs = p; }).catch(function () {});
     IDB.get('index').then(function (idx) {
-      if (idx && idx.chunks) start(idx, true);
-      else if (window.PMM_INDEX) start(window.PMM_INDEX, false);
-      else noIndex();
+      if (idx && idx.chunks) { start(idx, true); afterStart(); return; }
+      if (window.PMM_INDEX) { start(window.PMM_INDEX, false); afterStart(); return; }
+      fetch('pmm-index.enc', { method: 'HEAD' }).then(function (r) {
+        if (!r.ok) throw new Error('none');
+        var code = codeFromLink();
+        if (code) doUnlock(code); else showUnlock();
+        afterStart();
+      }).catch(function () { noIndex(); afterStart(); });
     });
   }
   boot();

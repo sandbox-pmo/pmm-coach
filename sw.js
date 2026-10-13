@@ -1,8 +1,8 @@
 /* Offline cache so the installed web app keeps working without a connection. */
-const CACHE = 'pmm-coach-v2';
+const CACHE = 'pmm-coach-v3';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'engine.js', 'llm.js', 'llm-worker.js', 'pmm-index.js', 'manifest.webmanifest',
   'img/welcome.png', 'img/listening.png', 'img/thinking.png', 'img/explaining.png', 'img/success.png', 'img/encourage.png',
-  'img/hill-logo.png', 'img/icon-192.png', 'img/icon-512.png', 'img/favicon.png',
+  'img/hill-logo.png', 'img/icon-192.png', 'img/apple-touch-icon.png', 'img/qr.png', 'img/icon-512.png', 'img/favicon.png',
   'fonts/public-sans-latin-400-normal.woff2', 'fonts/public-sans-latin-500-normal.woff2', 'fonts/public-sans-latin-600-normal.woff2',
   'fonts/public-sans-latin-700-normal.woff2', 'fonts/public-sans-latin-400-italic.woff2', 'fonts/public-sans-latin-700-italic.woff2'];
 self.addEventListener('install', e => {
