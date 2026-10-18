@@ -331,3 +331,7 @@ details.inst summary{cursor:pointer;padding:.6rem 0;font-weight:600}
   .top{padding-left:.7rem;padding-right:.5rem}
   .top-actions{gap:0}
 }
+
+.answer.expert{border-left-color:var(--ok)}
+.answer.expert .a-tag{color:var(--ok)}
+.a-exp{margin:.2rem 0 .5rem;font-size:1.05rem;line-height:1.45;max-width:75ch}

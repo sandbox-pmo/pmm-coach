@@ -157,7 +157,7 @@
     var my = ++S.seq;
     var res = engine.search(q, { literal: S.literal.length ? S.literal : false, requirementsOnly: S.req, kind: S.kind, section: S.sec ? +S.sec : 0 });
     RES = res; hlStems = res.hl || []; S.expanded = {};
-    try { res.ans = engine.answer(q, res); } catch (e) { res.ans = null; }
+    try { res.ans = engine.answer(q, res); res.exp = engine.expert(q); } catch (e) { res.ans = res.ans || null; res.exp = null; }
     S.showGroups = res.ans ? 3 : 10;
     setState('results');
     renderUnderstood(res); renderResults(res);
@@ -175,6 +175,7 @@
       var unk = res.interp && res.interp.unknown && res.interp.unknown[0];
       return setPose('encourage', unk ? 'I couldn\u2019t match \u201c' + esc(unk) + '\u201d. Let\u2019s make progress together \u2013 try another word.' : 'Let\u2019s make progress together! Try fewer or different words.');
     }
+    if (res.exp) return setPose('success', 'The PMM expert has an answer for this. It\u2019s in the first card.');
     if (res.ans && res.ans.headline && res.ans.type !== 'yesno') return setPose('explaining', 'Here\u2019s what the PMM says: <b>' + esc(res.ans.headline.length > 90 ? res.ans.headline.slice(0, 88) + '\u2026' : res.ans.headline) + '</b>');
     if (res.confidence === 'low') return setPose('encourage', 'Only part of your search matched. Let\u2019s make progress together \u2013 check what\u2019s missing below.');
     var g = res.groups[0];
@@ -244,6 +245,11 @@
     return h;
   }
 
+  function expertHTML(x) {
+    return '<section class="answer expert" aria-label="Answer from the PMM expert"><div class="a-tag">Answer from the PMM expert\u2019s Q&amp;A</div><p class="a-exp">' + esc(x.a) + '</p>' +
+      '<p class="a-note">Reference: ' + esc(x.ref) + (x.proc ? ' <button type="button" class="linkbtn" data-ctx="' + esc(x.proc) + '">Open the procedure</button>' : '') + '</p></section>';
+  }
+
   function answerHTML(a) {
     var h = '<section class="answer" aria-label="Answer"><div class="a-tag">' + (a.headline ? 'Answer' : 'Closest statements in the PMM') + '</div>';
     if (a.headline) h += '<p class="a-main">' + esc(a.headline) + '</p>';
@@ -267,7 +273,7 @@
         '<div class="chips" style="margin-top:.8rem">' + TOPICS.slice(0, 6).map(function (t, i) { return '<button class="chip" type="button" data-topic="' + i + '">' + esc(t.t) + '</button>'; }).join('') + '</div></div>';
       el.innerHTML = h; return;
     }
-    $('#answerBox').innerHTML = res.ans ? answerHTML(res.ans) : '';
+    $('#answerBox').innerHTML = (res.exp ? expertHTML(res.exp) : '') + (res.ans ? answerHTML(res.ans) : '');
     h += (res.ans ? '<h2 class="rel">Related passages</h2>' : '') + '<div class="summary" aria-live="polite"><span>' + res.total + ' match' + (res.total === 1 ? '' : 'es') + ' in ' + res.groups.length + ' process' + (res.groups.length === 1 ? '' : 'es') + '</span>' +
       (active ? '<button type="button" class="linkbtn" data-clear-filters>Clear filters</button>' : '<span>' + res.took + ' ms</span>') + '</div>';
     res.groups.slice(0, S.showGroups).forEach(function (g, gi) {
@@ -360,7 +366,7 @@
   }
   function buildMessages(q, ps, ans) {
     var ctx = ps.map(function (p, k) { return '[' + (k + 1) + '] (' + (p.proc.indexOf('SEC-') === 0 ? 'PMM' : p.proc) + ', p.' + p.p + ') ' + p.text; }).join('\n\n');
-    var hint = ans && ans.headline && ans.type !== 'yesno' ? 'Verified finding from the manual: ' + ans.headline + '\n\n' : '';
+    var ex = engine.expert(q); var hint = (ex ? 'Expert note: ' + ex.a + ' (' + ex.ref + ')\n\n' : '') + (ans && ans.headline && ans.type !== 'yesno' ? 'Verified finding from the manual: ' + ans.headline + '\n\n' : '');
     var hist = CHAT.msgs.filter(function (m) { return m.role === 'user' || (m.role === 'coach' && m.plain); }).slice(-4, -1).map(function (m) { return { role: m.role === 'user' ? 'user' : 'assistant', content: m.plain || m.text }; });
     return [{ role: 'system', content: chatSystemPrompt() }].concat(hist, [{ role: 'user', content: hint + 'Passages:\n' + ctx + '\n\nQuestion: ' + q }]);
   }
@@ -382,8 +388,9 @@
     d.innerHTML = role === 'user' ? '<div class="bub">' + html + '</div>' : '<img class="ava" src="' + POSE[pose || 'explaining'] + '" alt=""><div class="bub">' + html + '</div>';
     log.appendChild(d); log.parentElement.scrollTop = log.parentElement.scrollHeight; return d;
   }
-  function fallbackReply(ans, ps) {
-    var h = '';
+  function fallbackReply(ans, ps, q) {
+    var h = ''; var ex = q ? engine.expert(q) : null;
+    if (ex) h += '<div class="big">' + esc(ex.a) + '</div><div class="tip">Reference: ' + esc(ex.ref) + '</div>';
     if (ans && ans.headline) h += '<div class="big">' + esc(ans.headline) + '</div>';
     var ev = ans ? ans.evidence : [];
     if (ev.length) h += ev.slice(0, 2).map(function (e) { return '<div class="quote">' + esc(e.text.length > 300 ? e.text.slice(0, 297) + '\u2026' : e.text) + ' <span style="color:var(--muted)">p.' + e.p + '</span></div>'; }).join('');
@@ -403,7 +410,7 @@
     if (!ps.length && !(ans && ans.evidence.length)) { return finish('<p>I could not find this in the PMM. Try different words, or name the process or topic.</p>', '', 'encourage'); }
     if (!(window.PMMLLM && PMMLLM.ready())) {
       var tip = PMMLLM && PMMLLM.enabled && PMMLLM.enabled() ? 'The on-device AI is still starting.' : 'Turn on the on-device AI in Settings for answers in plain words.';
-      return finish(fallbackReply(ans, ps) + srcHTML(ans && ans.evidence.length ? ans.evidence : ps) + '<div class="tip">' + tip + '</div>', ans && ans.headline || '', ans && ans.headline ? 'success' : 'explaining');
+      return finish(fallbackReply(ans, ps, q) + srcHTML(ans && ans.evidence.length ? ans.evidence : ps) + '<div class="tip">' + tip + '</div>', ans && ans.headline || '', ans && ans.headline ? 'success' : 'explaining');
     }
     var acc = '';
     PMMLLM.ask(buildMessages(q, ps, ans), function (t) { acc += t; bub.innerHTML = citeHTML(acc, ps); $('#chatLog').parentElement.scrollTop = 1e6; })
@@ -412,7 +419,7 @@
         var html = citeHTML(full, ps) + srcHTML(ps) + (bad.length ? '<div class="warn">Check the number' + (bad.length > 1 ? 's' : '') + ' ' + bad.map(esc).join(', ') + ' against the cited pages. It does not appear in the passages I used.</div>' : '');
         finish(html, full, bad.length ? 'encourage' : 'success');
       })
-      .catch(function (err) { finish(fallbackReply(ans, ps) + srcHTML(ps) + '<div class="warn">The on-device AI could not answer (' + esc(err.message) + '). Showing the closest passages instead.</div>', '', 'encourage'); });
+      .catch(function (err) { finish(fallbackReply(ans, ps, q) + srcHTML(ps) + '<div class="warn">The on-device AI could not answer (' + esc(err.message) + '). Showing the closest passages instead.</div>', '', 'encourage'); });
   }
   function openChat(prefill) {
     var h = '<div class="d-head"><h2 id="drawerTitle">Ask the Coach</h2><button class="icon-btn close" type="button" data-close aria-label="Close">' + ico('close') + '</button></div>' +
@@ -592,9 +599,10 @@
   /* ---------- access code (the manual is shipped encrypted on the public site) ---------- */
   var SITE_URL = 'https://sandbox-pmo.github.io/pmm-coach/';
   function b64(s) { var bin = atob(s), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+  var lastEtag = '';
   function unlockWith(code) {
     var norm = String(code).toUpperCase().replace(/[^A-Z0-9]/g, '');
-    return fetch('pmm-index.enc', { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error('missing'); return r.json(); }).then(function (enc) {
+    return fetch('pmm-index.enc', { cache: 'no-cache' }).then(function (r) { if (!r.ok) throw new Error('missing'); lastEtag = r.headers.get('etag') || r.headers.get('last-modified') || ''; return r.json(); }).then(function (enc) {
       return crypto.subtle.importKey('raw', new TextEncoder().encode(norm), 'PBKDF2', false, ['deriveKey'])
         .then(function (km) { return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: b64(enc.salt), iterations: enc.iter, hash: 'SHA-256' }, km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']); })
         .then(function (key) { return crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(enc.iv), additionalData: new TextEncoder().encode('pmm-coach-v1') }, key, b64(enc.data)); })
@@ -618,7 +626,7 @@
     var m = $('#unlockMsg'); if (m) m.textContent = 'Unlocking\u2026'; setPose('thinking', 'Let me check that.');
     unlockWith(code).then(function (idx) {
       if (!idx || !idx.chunks) throw new Error('bad');
-      return IDB.set('index', idx).catch(function () {}).then(function () {
+      return IDB.set('index', idx).catch(function () {}).then(function () { return IDB.set('access', { code: code, etag: lastEtag }).catch(function () {}); }).then(function () {
         if (!isIOS()) { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
         S.locked = false; $('#searchForm').style.display = ''; start(idx, true);
       });
@@ -675,6 +683,26 @@
     if ('serviceWorker' in navigator && /^https?:/.test(location.protocol) && !window.Capacitor) navigator.serviceWorker.register('sw.js').catch(function () {});
     var url = new URLSearchParams(location.search).get('q'); if (url) { $('#q').value = url; $('#btnClear').hidden = false; runSearch(true); }
   }
+
+  /* a newer encrypted manual was published: fetch it quietly (the code stays on this device only) */
+  function checkUpdate(linkCode) {
+    IDB.get('access').then(function (acc) {
+      var code = (acc && acc.code) || linkCode; if (!code) return;
+      return fetch('pmm-index.enc', { method: 'HEAD', cache: 'no-cache' }).then(function (r) {
+        var e = r.headers.get('etag') || r.headers.get('last-modified') || ''; if (!r.ok || !e) return;
+        if (acc && acc.etag === e) return;
+        if (sessionStorage.getItem('pmmc.upd') === e) return;      // never loop
+        sessionStorage.setItem('pmmc.upd', e);
+        return unlockWith(code).then(function (idx) {
+          if (!idx || !idx.chunks) return;
+          return IDB.set('index', idx).then(function () { return IDB.set('access', { code: code, etag: lastEtag }); }).then(function () {
+            toast('Manual updated'); setTimeout(function () { if (!isIOS()) { try { history.replaceState(null, '', location.pathname + location.search); } catch (x) {} } location.reload(); }, 900);
+          });
+        });
+      });
+    }).catch(function () {});
+  }
+
   function afterStart() {
     refreshInstallUI(); startIdle();
     var qs = new URLSearchParams(location.search);
@@ -690,7 +718,7 @@
     applyPrefs();
     if (desktop && desktop.getPrefs) desktop.getPrefs().then(function (p) { desktop.prefs = p; }).catch(function () {});
     IDB.get('index').then(function (idx) {
-      if (idx && idx.chunks) { start(idx, true); afterStart(); return; }
+      if (idx && idx.chunks) { start(idx, true); afterStart(); checkUpdate(codeFromLink()); return; }
       if (window.PMM_INDEX) { start(window.PMM_INDEX, false); afterStart(); return; }
       fetch('pmm-index.enc', { method: 'HEAD' }).then(function (r) {
         if (!r.ok) throw new Error('none');

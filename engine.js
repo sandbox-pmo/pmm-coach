@@ -139,8 +139,11 @@
     var procById = {}, secTitle = {};
     (index.sections || []).forEach(function (s) { secTitle[s.n] = s.title; });
     (index.processes || []).forEach(function (p) { procById[p.id] = p; });
+    var secProcs = {};
+    (index.processes || []).forEach(function (p) { (secProcs[p.sec] = secProcs[p.sec] || []).push(p); });
     function procOf(c) {
       if (c.pr && procById[c.pr]) return procById[c.pr];
+      if (secProcs[c.s] && secProcs[c.s].length === 1 && c.s > 1) return secProcs[c.s][0];   // e.g. Section 2 has a single process
       var id = 'SEC-' + c.s;
       if (!procById[id]) procById[id] = { id: id, sec: c.s, abbr: '', title: (secTitle[c.s] || 'General') + ' (general)', num: String(c.s), page: c.p, pseudo: true };
       return procById[id];
@@ -483,6 +486,8 @@
       });
       res.total = items.length;
       res.groups = groupize(items, false, C);
+      navigate(query, res);
+      res.total = res.groups.reduce(function (z, g) { return z + g.count; }, 0);
       var lead = items[0];
       var allExact = C.every(function (cn) { return cn.status === 'exact' || cn.status === 'typo' || cn.status === 'split' || cn.status === 'acronym'; });
       res.confidence = !lead ? 'none' : (lead.cov === 1 && allExact && it.unknown.length === 0) ? 'high' : lead.cov >= 0.5 ? 'medium' : 'low';
@@ -515,6 +520,72 @@
       });
       if (!keepOrder) out.sort(function (a, b) { return b.score - a.score; });
       return out;
+    }
+
+
+    /* ---- navigation: "Which procedure covers X?" -> the process whose title is X ---- */
+    var NAV_RX = /^\s*(which (pmm )?(procedure|process|section)|what should i check|where (can i|do i) find|where (is|are)|what (procedure|process)|which (pmm )?procedure covers)\b/i;
+    var NAV_DROP = new Set(['pmm', 'v3', 'procedure', 'procedures', 'process', 'processes', 'requirement', 'requirements', 'covered', 'covers', 'cover', 'described',
+      'find', 'check', 'section', 'manual', 'refer', 'applicable', 'relevant', 'details', 'detail', 'information', 'rules', 'guidance', 'steps', 'step']);
+    function titleSim(qs, ts) {
+      if (!qs.length || !ts.length) return 0;
+      var hit = 0, used = {};
+      qs.forEach(function (q, k) {
+        for (var j = 0; j < ts.length; j++) {
+          if (used[j]) continue;
+          var t = ts[j];
+          if (t === q || (q.length >= 5 && dl(q, t, q.length >= 7 ? 2 : 1) <= (q.length >= 7 ? 2 : 1)) || (q.length >= 3 && k === qs.length - 1 && t.indexOf(q) === 0)) { used[j] = 1; hit++; break; }
+        }
+      });
+      return (hit / ts.length + hit / qs.length) / 2;
+    }
+    function navigate(query, res) {
+      var nav = NAV_RX.test(query);
+      var topic = contentStems(norm(query).replace(/\([^)]*\)/g, ' $& ').replace(/[()]/g, ' ')).filter(function (w) { return !NAV_DROP.has(w); });
+      var acr0 = {}; // acronym words in the query count as their full form too ("lifecycle (plc)")
+      if (!topic.length) return;
+      var scored = [];
+      procList.forEach(function (p) {
+        if (p.pseudo) return;
+        var sim = titleSim(topic, procTok[p.id] || []);
+        if (sim >= (nav ? 0.62 : 0.8)) scored.push({ p: p, sim: sim });
+      });
+      if (!scored.length) return;
+      scored.sort(function (a, b) { return b.sim - a.sim; });
+      var top = scored[0].sim, base = res.groups.length ? res.groups[0].score : 1;
+      scored.filter(function (x) { return x.sim >= top - 0.05; }).slice(0, 2).forEach(function (x) {
+        var g = res.groups.filter(function (g) { return g.id === x.p.id; })[0];
+        if (!g) {
+          var ids = (byProc[x.p.id] || []).slice(0, 4);
+          g = groupize(ids.map(function (ix) { return { i: ix, score: base * 0.2, cov: 1, matched: [], missing: [] }; }), false, null)[0];
+          if (!g) return; res.groups.push(g);
+        }
+        g.score = Math.max(g.score, base) * (1.5 + 2 * x.sim); g.titleMatch = x.sim;
+      });
+      res.groups.sort(function (a, b) { return b.score - a.score; });
+    }
+
+
+    /* ---- the PMM expert's own questions and answers (verified cards) ---- */
+    var EXPERT = (index.expert || []).map(function (e) {
+      return { q: e.q, a: e.a, ref: e.ref, sheet: e.sheet, type: questionType(norm(e.q).trim()), st: contentStems(norm(e.q).replace(/[()]/g, ' ')).filter(function (w) { return !NAV_DROP.has(w); }) };
+    });
+    function expertMatch(query) {
+      if (!EXPERT.length) return null;
+      var qs = contentStems(norm(query).replace(/[()]/g, ' ')).filter(function (w) { return !NAV_DROP.has(w); });
+      if (qs.length < 2) return null;
+      var best = null, qt = questionType(norm(query).trim());
+      EXPERT.forEach(function (e) {
+        if (Math.abs(e.st.length - qs.length) > Math.max(3, qs.length)) return;
+        var strict = { count: 1, who: 1, when: 1 };
+        if (strict[qt] && e.type !== qt) return;                        // a "how many" question must not get a "where is" answer
+        var sim = titleSim(qs, e.st);
+        if (strict[e.type] && qt !== e.type && sim < 0.9) return;       // scrambled wording is fine if it is a very close match
+        if (!best || sim > best.sim) best = { sim: sim, e: e };
+      });
+      if (!best || best.sim < 0.8) return null;
+      var codes = (best.e.ref.match(/PMM-\d{3}-[A-Z]{3}-\d{3}/g) || []).filter(function (c, i, a) { return a.indexOf(c) === i && procById[c]; });
+      return { q: best.e.q, a: best.e.a, ref: best.e.ref, sim: best.sim, proc: codes[0] || '' };
     }
 
     /* ---- autocomplete ---- */
@@ -644,6 +715,70 @@
       return items;
     }
 
+
+    /* ---- duration questions: "how many days / how long / within how many days / deadline" ---- */
+    var DUR_Q = /\b(how many (calendar |working |business )?(days|weeks|months|hours)|how long|within how many|how soon|how much time|time limit|deadline|by when|how many (calendar |working )?day)\b/;
+    var DUR_WORDS = new Set(['day', 'days', 'calendar', 'working', 'business', 'long', 'many', 'soon', 'deadline', 'allowed', 'allow', 'take', 'takes', 'much', 'week', 'weeks', 'month', 'months', 'hour', 'hours', 'time', 'limit', 'period', 'have', 'must', 'should', 'cited', 'under', 'procedure']);
+    var DURATION_RX = /\b(?:within|in|no later than|not (?:to )?exceed(?:ing)?|a maximum of|maximum of|at least|before|after)?\s*(\d{1,3})\s+(calendar |working |business )?(days?|weeks?|months?|hours?)\b/i;
+    var DUR_SENT = null;
+    function durationSentences() {
+      if (DUR_SENT) return DUR_SENT; DUR_SENT = [];
+      chunks.forEach(function (c, ix) {
+        if (c.k === 'Workflow') return;
+        sentencesOf(c).forEach(function (st) { if (DURATION_RX.test(st)) DUR_SENT.push({ ix: ix, s: st }); });
+      });
+      return DUR_SENT;
+    }
+    function durationAnswer(query, res, C) {
+      var cc = C.filter(function (cn) { return !DUR_WORDS.has(cn.raw); });
+      // "Project Management Plan (PMP)": the acronym and its spelled-out words are one idea, count it once
+      cc.filter(function (cn) { return cn.status === 'acronym'; }).forEach(function (cn) {
+        var ex = {}; cn.alts.forEach(function (a) { if (a.via === 'acronym') a.stems.forEach(function (t) { ex[terms[t]] = 1; }); });
+        var drop = cc.filter(function (o) { return o !== cn && o.status !== 'acronym' && ex[stem(o.raw)]; });
+        if (drop.length >= 2) cc = cc.filter(function (o) { return drop.indexOf(o) < 0; });
+      });
+      if (!cc.length) return null;
+      var procQ = /\b(procedure|process)\b/.test(norm(query)) && /\b(take|takes|long|complete|completed|finish)\b/.test(norm(query));
+      var wsum = 0, wts = cc.map(function (cn) { var m = 0; cn.alts.forEach(function (a) { a.stems.forEach(function (t) { m = Math.max(m, idf(t)); }); }); wsum += m; return m; });
+      var cand = [];
+      durationSentences().forEach(function (d) {
+        var c = chunks[d.ix], p = procOf(c);
+        var ids = new Set(); words(d.s).forEach(function (w) { if (!STOP.has(w)) { var t = vocab.get(stem(w)); if (t !== undefined) ids.add(t); } });
+        var hs = new Set(contentStems((c.h || '') + ' ' + (p.pseudo ? '' : p.title)).map(function (x) { return vocab.get(x); }));
+        var sentHit = 0, total = 0;
+        cc.forEach(function (cn, k) {
+          var inS = 0, inH = 0;
+          cn.alts.forEach(function (a) { if (a.stems.every(function (t) { return ids.has(t); })) inS = Math.max(inS, a.w); else if (a.stems.every(function (t) { return hs.has(t); })) inH = Math.max(inH, a.w); });
+          var ownProc = procQ && /\bthis (procedure|process)\b[^.]{0,40}\b(completed|performed)\b/i.test(d.s);
+          if (inS) { sentHit += wts[k] * inS; total += wts[k] * inS; } else if (inH) { total += wts[k] * inH * (ownProc ? 1 : 0.6); if (ownProc) sentHit += wts[k] * inH; }
+        });
+        var cov = total / wsum; if (cov < 0.55) return;
+        var sc = cov + 0.35 * (sentHit / wsum);
+        if (procQ && /\bthis (procedure|process)\b[^.]{0,40}\b(completed|performed)\b/i.test(d.s)) sc *= 1.5;
+        if (/\b(shall|must|should)\b/i.test(d.s)) sc *= 1.05;
+        if (c.k === 'Policy' || c.k === 'Procedure') sc *= 1.04;
+        cand.push({ ix: d.ix, s: d.s, sc: sc, proc: p.id, label: p.title, p: c.p });
+      });
+      if (!cand.length) return null;
+      cand.sort(function (a, b) { return b.sc - a.sc; });
+      var best = cand[0], picks = [best];
+      cand.slice(1).forEach(function (x) { if (picks.length < 3 && x.sc >= best.sc * 0.93 && x.s !== best.s) picks.push(x); });
+      function phrase(st) {
+        var m = DURATION_RX.exec(st); if (!m) return '';
+        var tail = st.slice(m.index + m[0].length).match(/^\s*((?:from|of|after|following|since|before)\b[^.;]{0,90})/i);
+        var pre = (m[0].match(/^\s*(within|in|no later than|not (?:to )?exceed(?:ing)?|a maximum of|maximum of|at least|before|after)\b/i) || [])[1];
+        var core = m[1] + ' ' + (m[2] ? m[2].trim() + ' ' : '') + m[3];
+        var kind = m[2] ? '' : ' (working days unless the PMM says calendar days)';
+        var txt = (pre ? pre.charAt(0).toUpperCase() + pre.slice(1) + ' ' : '') + core + (tail ? ' ' + tail[1].trim() : '');
+        if (!pre) txt = core + (tail ? ' ' + tail[1].trim() : '');
+        return txt.replace(/^./, function (z) { return z.toUpperCase(); }) + kind;
+      }
+      var heads = picks.map(function (x) { return phrase(x.s); });
+      var headline = picks.length > 1 && heads[0] !== heads[1] ? heads.map(function (h, i) { return h + ' \u2013 ' + picks[i].label; }).join('   \u00b7   ') : heads[0];
+      return { type: 'duration', headline: headline, note: picks.length > 1 && heads[0] !== heads[1] ? 'Similar timelines appear in more than one process; check which one applies.' : '',
+        evidence: picks.map(function (x) { return { i: x.ix, p: x.p, text: x.s, proc: x.proc, label: x.label }; }), confidence: best.sc >= 0.95 ? 'high' : 'medium' };
+    }
+
     function answer(query, res) {
       var nq = ' ' + norm(query).trim() + ' ';
       var type = questionType(nq.trim());
@@ -654,6 +789,7 @@
       var topIdx = []; res.groups.slice(0, 8).forEach(function (g) { g.items.slice(0, 6).forEach(function (it) { topIdx.push(it.i); }); });
       if (!topIdx.length) return null;
 
+      if (DUR_Q.test(nq)) { var da = durationAnswer(query, res, C); if (da) return da; }
       /* --- count --- */
       if (type === 'count') {
         var fw = (nq.match(/\b(?:how many|number of|how much)\s+(.+)$/) || [0, ''])[1].replace(/[?.!,]/g, '').split(/\s+/), focus = [], primary = true;
@@ -760,7 +896,7 @@
     }
 
     return {
-      passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
+      expert: expertMatch, passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
       stem: stem, norm: norm, words: words,
       chunk: function (i) { return chunks[i]; },
       process: function (id) { return procById[id]; },
