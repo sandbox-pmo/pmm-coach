@@ -157,7 +157,11 @@
     var my = ++S.seq;
     var res = engine.search(q, { literal: S.literal.length ? S.literal : false, requirementsOnly: S.req, kind: S.kind, section: S.sec ? +S.sec : 0 });
     RES = res; hlStems = res.hl || []; S.expanded = {};
-    try { res.ans = engine.answer(q, res); res.exp = engine.expert(q); } catch (e) { res.ans = res.ans || null; res.exp = null; }
+    try {
+      res.ans = engine.answer(q, res);
+      var ex = engine.experts ? engine.experts(q) : { best: engine.expert(q), others: [] };
+      res.exp = ex.best; res.expOthers = ex.others || [];
+    } catch (e) { res.ans = res.ans || null; res.exp = null; res.expOthers = []; }
     S.showGroups = res.ans ? 3 : 10;
     setState('results');
     renderUnderstood(res); renderResults(res);
@@ -245,13 +249,46 @@
     return h;
   }
 
+  /* ---------- PMM expert answers ----------
+   * Best match: light-red card, English and Arabic side by side, the straight answer first,
+   * then the rest of the expert's requirement text. Other possible answers: English only. */
+  function firstSentence(t) {
+    var m = String(t || '').match(/^.+?[.!?\u061F;\u061B](?=\s|$)/);
+    return m ? m[0].replace(/[;\u061B]$/, '.') : String(t || '');
+  }
+  function splitAnswer(t) {               // [straight answer, the rest]
+    t = String(t || '').trim(); var d = firstSentence(t);
+    return [d, t.slice(d.length).replace(/^[\s;\u061B]+/, '').trim()];
+  }
+  function ltr(h) {                        // keep codes such as PMM-014-PRO-100 or (WBS) readable inside Arabic text
+    return h.replace(/[A-Za-z0-9]+(?:[-_.\/][A-Za-z0-9]+)+|[A-Z][A-Za-z0-9&]*[A-Z0-9]/g, function (m) { return '<bdi dir="ltr">' + m + '</bdi>'; });
+  }
+  function expertCol(lang, q, a) {
+    var ar = lang === 'ar';
+    if (!a) return '<div class="bx-col" lang="ar" dir="rtl"><p class="bx-missing">\u0627\u0644\u0646\u0635 \u0627\u0644\u0639\u0631\u0628\u064A \u063A\u064A\u0631 \u0645\u062A\u0648\u0641\u0631 \u0644\u0647\u0630\u0647 \u0627\u0644\u0625\u062C\u0627\u0628\u0629.</p></div>';
+    var p = splitAnswer(a), hl = function (x) { return ar ? ltr(esc(x)) : engine.highlight(x, hlStems); };
+    return '<div class="bx-col" lang="' + lang + '"' + (ar ? ' dir="rtl"' : '') + '>' +
+      '<p class="bx-q">' + (ar ? ltr(esc(q)) : esc(q)) + '</p>' +
+      '<p class="bx-direct">' + hl(p[0]) + '</p>' +
+      (p[1] ? '<p class="bx-more">' + hl(p[1]) + '</p>' : '') + '</div>';
+  }
   function expertHTML(x) {
-    return '<section class="answer expert" aria-label="Answer from the PMM expert"><div class="a-tag">Answer from the PMM expert\u2019s Q&amp;A</div><p class="a-exp">' + esc(x.a) + '</p>' +
+    return '<section class="answer expert best-exp" aria-label="Best match from the PMM expert">' +
+      '<div class="bx-tag"><span>Best match \u00b7 PMM expert</span><span lang="ar" dir="rtl">\u0623\u0641\u0636\u0644 \u0625\u062C\u0627\u0628\u0629</span></div>' +
+      '<div class="bx-cols">' + expertCol('en', x.q, x.a) + expertCol('ar', x.qa || '', x.aa || '') + '</div>' +
       '<p class="a-note">Reference: ' + esc(x.ref) + (x.proc ? ' <button type="button" class="linkbtn" data-ctx="' + esc(x.proc) + '">Open the procedure</button>' : '') + '</p></section>';
   }
+  function expertOthersHTML(list, hasBest) {
+    if (!list || !list.length) return '';
+    return '<section class="answer others" aria-label="Other possible answers"><div class="a-tag">' + (hasBest ? 'Other possible answers' : 'Possible answers from the PMM expert') + '</div><ul class="o-list">' +
+      list.map(function (x) {
+        return '<li><details><summary>' + esc(x.q) + '</summary><p>' + engine.highlight(x.a, hlStems) + '</p><p class="a-note">Reference: ' + esc(x.ref) +
+          (x.proc ? ' <button type="button" class="linkbtn" data-ctx="' + esc(x.proc) + '">Open the procedure</button>' : '') + '</p></details></li>';
+      }).join('') + '</ul></section>';
+  }
 
-  function answerHTML(a) {
-    var h = '<section class="answer" aria-label="Answer"><div class="a-tag">' + (a.headline ? 'Answer' : 'Closest statements in the PMM') + '</div>';
+  function answerHTML(a, afterExpert) {
+    var h = '<section class="answer" aria-label="Answer"><div class="a-tag">' + (afterExpert ? 'Requirements from the PMM' : a.headline ? 'Answer' : 'Closest statements in the PMM') + '</div>';
     if (a.headline) h += '<p class="a-main">' + esc(a.headline) + '</p>';
     if (a.note) h += '<p class="a-note">' + esc(a.note) + '</p>';
     if (a.items) h += '<ol class="a-list">' + a.items.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ol>';
@@ -273,12 +310,12 @@
         '<div class="chips" style="margin-top:.8rem">' + TOPICS.slice(0, 6).map(function (t, i) { return '<button class="chip" type="button" data-topic="' + i + '">' + esc(t.t) + '</button>'; }).join('') + '</div></div>';
       el.innerHTML = h; return;
     }
-    $('#answerBox').innerHTML = (res.exp ? expertHTML(res.exp) : '') + (res.ans ? answerHTML(res.ans) : '');
+    $('#answerBox').innerHTML = (res.exp ? expertHTML(res.exp) : '') + (res.ans ? answerHTML(res.ans, !!res.exp) : '') + expertOthersHTML(res.expOthers, !!res.exp);
     h += (res.ans ? '<h2 class="rel">Related passages</h2>' : '') + '<div class="summary" aria-live="polite"><span>' + res.total + ' match' + (res.total === 1 ? '' : 'es') + ' in ' + res.groups.length + ' process' + (res.groups.length === 1 ? '' : 'es') + '</span>' +
       (active ? '<button type="button" class="linkbtn" data-clear-filters>Clear filters</button>' : '<span>' + res.took + ' ms</span>') + '</div>';
     res.groups.slice(0, S.showGroups).forEach(function (g, gi) {
       var open = S.expanded[g.id], lim = open ? 15 : 3, items = g.items.slice(0, lim);
-      var best = gi === 0 && res.groups.length > 1 && !res.direct;
+      var best = gi === 0 && res.groups.length > 1 && !res.direct && !res.exp;   // the expert card is the best match when there is one
       h += '<section class="group' + (best ? ' best' : '') + '"><div class="g-head"><h3 class="g-title"><button type="button" data-ctx="' + esc(g.id) + '">' + esc(g.title) + '</button></h3>' + (best ? '<span class="badge">Best match</span>' : '<span></span>') +
         '<div class="g-meta">' + (g.pseudo ? '' : '<span class="code">' + esc(g.id) + '</span>') + '<span>Section ' + g.section + ' \u00b7 ' + esc(g.sectionTitle.replace(/^Project /, '')) + '</span><span>p.' + g.page + '</span><span>' + g.count + ' match' + (g.count === 1 ? '' : 'es') + '</span></div></div>';
       h += items.map(function (it) { return itemHTML(it, res); }).join('');

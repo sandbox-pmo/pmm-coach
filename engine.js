@@ -36,7 +36,10 @@
     CPI: 'Cost Performance Index', RACI: 'Responsible Accountable Consulted Informed', PMIS: 'Project Management Information System',
     PMF: 'Project Management Form', MOF: 'Ministry of Finance', GRC: 'Governance Risk and Compliance', SLA: 'Service Level Agreement',
     NOC: 'No Objection Certificate', DBB: 'Design Bid Build', EPC: 'Engineering Procurement Construction', LL: 'Lessons Learned',
-    PMO: 'Project Management Office', SGR: 'Stage Gate Review', PLC: 'Project Life Cycle', CPPP: 'Capital Projects Portfolio Plan'
+    PMO: 'Project Management Office', SGR: 'Stage Gate Review', PLC: 'Project Life Cycle', CPPP: 'Capital Projects Portfolio Plan',
+    RFP: 'Request for Proposal', RFQ: 'Request for Quotation', IPC: 'Interim Payment Certificate', VO: 'Variation Order',
+    NCR: 'Non-Conformance Report', VE: 'Value Engineering', QRA: 'Quantitative Risk Analysis', PMP: 'Project Management Plan',
+    DLP: 'Defects Liability Period', TC: 'Testing and Commissioning'
   };
 
   // loose concept groups: each group is treated as "about the same thing" at a lower weight
@@ -566,27 +569,90 @@
     }
 
 
-    /* ---- the PMM expert's own questions and answers (verified cards) ---- */
-    var EXPERT = (index.expert || []).map(function (e) {
-      return { q: e.q, a: e.a, ref: e.ref, sheet: e.sheet, type: questionType(norm(e.q).trim()), st: contentStems(norm(e.q).replace(/[()]/g, ' ')).filter(function (w) { return !NAV_DROP.has(w); }) };
+    /* ---- the PMM expert's own questions and answers (verified cards) ----
+     * Matching understands typos, plural/singular (stems), joined words via stems, abbreviations
+     * (RFP = Request for Proposal) and related wording (synonym groups) at a slightly lower weight.
+     * Returns the best match plus other possible answers. */
+    var EXP_SYN = {};
+    SYN_GROUPS.concat([['invoice', 'ipc'], ['snag', 'punch'], ['permit', 'license', 'licence'], ['tender', 'bid', 'bidding'],
+      ['variation', 'vo'], ['schedule', 'programme']]).forEach(function (g, gi) {
+      g.forEach(function (w) { var s = stem(w); if (EXP_SYN[s] === undefined) EXP_SYN[s] = gi; });
     });
-    function expertMatch(query) {
-      if (!EXPERT.length) return null;
-      var qs = contentStems(norm(query).replace(/[()]/g, ' ')).filter(function (w) { return !NAV_DROP.has(w); });
-      if (qs.length < 2) return null;
-      var best = null, qt = questionType(norm(query).trim());
-      EXPERT.forEach(function (e) {
-        if (Math.abs(e.st.length - qs.length) > Math.max(3, qs.length)) return;
-        var strict = { count: 1, who: 1, when: 1 };
-        if (strict[qt] && e.type !== qt) return;                        // a "how many" question must not get a "where is" answer
-        var sim = titleSim(qs, e.st);
-        if (strict[e.type] && qt !== e.type && sim < 0.9) return;       // scrambled wording is fine if it is a very close match
-        if (!best || sim > best.sim) best = { sim: sim, e: e };
+    var EXP_OPT = new Set(['who', 'whom', 'whose', 'when', 'where', 'why', 'long', 'many', 'much', 'soon', 'often']);   // question words: count only when both sides have them
+    var NO_EXPAND = new Set(['nwc', 'pmm', 'v3']);    // names, not abbreviations a user would spell out
+    var JOIN = [[/\bhand over\b/g, 'handover'], [/\bkick off\b/g, 'kickoff'], [/\bclose out\b/g, 'closeout'], [/\btake over\b/g, 'takeover'],
+      [/\bsign off\b/g, 'signoff'], [/\bstart up\b/g, 'startup'], [/\bset up\b/g, 'setup'], [/\bcash flow\b/g, 'cashflow'], [/\blife cycle\b/g, 'lifecycle']];
+    function expertStems(text) {                       // [{s: stem, w: word as written, o: optional}]
+      var out = [], seen = {}, t = norm(text).replace(/[()\/-]/g, ' ').replace(/\s+/g, ' ');
+      JOIN.forEach(function (j) { t = t.replace(j[0], j[1]); });
+      function add(st, w, o) { if (st && !seen[st] && !NAV_DROP.has(st)) { seen[st] = 1; out.push({ s: st, w: w, o: !!o }); } }
+      words(t).forEach(function (w) {
+        if (STOP.has(w) || (w.length < 2 && !/\d/.test(w))) return;
+        if (EXP_OPT.has(w)) { add(w, w, true); return; }
+        add(stem(w), w);
+        var a = acr[w];
+        if (a && w.length <= 6 && !NAV_DROP.has(w) && !NO_EXPAND.has(w))     // "rfp" also counts as "request for proposal"
+          words(a.f).forEach(function (fw) { if (!STOP.has(fw)) add(stem(fw), fw); });
       });
-      if (!best || best.sim < 0.8) return null;
-      var codes = (best.e.ref.match(/PMM-\d{3}-[A-Z]{3}-\d{3}/g) || []).filter(function (c, i, a) { return a.indexOf(c) === i && procById[c]; });
-      return { q: best.e.q, a: best.e.a, ref: best.e.ref, sim: best.sim, proc: codes[0] || '' };
+      return out;
     }
+    function near(a, b) {                              // one or two letters off, depending on length
+      var m = a.length >= 7 ? 2 : 1;
+      return a.length >= 5 && dl(a, b, m) <= m;
+    }
+    function expSim(qs, ts) {
+      if (!qs.length || !ts.length) return 0;
+      var hit = 0, used = {}, qn = 0, tn = 0, optHit = 0;
+      qs.forEach(function (q, k) {
+        var best = 0, bj = -1;
+        for (var j = 0; j < ts.length; j++) {
+          if (used[j]) continue;
+          var t = ts[j], v = 0;
+          if (t.s === q.s) v = 1;
+          else if (q.o || t.o) v = 0;
+          else if (near(q.s, t.s) || near(q.w, t.w)) v = 0.95;                                           // typo
+          else if (q.s.length >= 3 && k === qs.length - 1 && t.s.indexOf(q.s) === 0) v = 0.9;             // still typing
+          else if (EXP_SYN[q.s] !== undefined && EXP_SYN[q.s] === EXP_SYN[t.s]) v = 0.85;                  // related word
+          if (v > best) { best = v; bj = j; if (v === 1) break; }
+        }
+        if (bj >= 0) { used[bj] = 1; hit += best; if (q.o) optHit++; }
+      });
+      qs.forEach(function (q) { if (!q.o) qn++; }); ts.forEach(function (t) { if (!t.o) tn++; });
+      qn += optHit; tn += optHit;                                                                         // question words count only when matched
+      if (!qn || !tn) return 0;
+      return (hit / tn + hit / qn) / 2;
+    }
+    var EXPERT = (index.expert || []).map(function (e) {
+      return { q: e.q, a: e.a, qa: e.q_ar || '', aa: e.a_ar || '', ref: e.ref, sheet: e.sheet, type: questionType(norm(e.q).trim()), st: expertStems(e.q) };
+    });
+    function expertCard(x) {
+      var codes = (x.e.ref.match(/PMM-\d{3}-[A-Z]{3}-\d{3}/g) || []).filter(function (c, i, a) { return a.indexOf(c) === i && procById[c]; });
+      return { q: x.e.q, a: x.e.a, qa: x.e.qa, aa: x.e.aa, ref: x.e.ref, sim: x.sim, proc: codes[0] || '' };
+    }
+    function expertAll(query, max) {
+      var out = { best: null, others: [] };
+      if (!EXPERT.length) return out;
+      var qs = expertStems(query);
+      if (qs.length < 2) return out;
+      var qt = questionType(norm(query).trim()), strict = { count: 1, who: 1, when: 1 }, scored = [];
+      EXPERT.forEach(function (e) {
+        var sim = expSim(qs, e.st);
+        if (sim < 0.5) return;
+        var typeOk = !(strict[qt] && e.type !== qt) && !(strict[e.type] && qt !== e.type && sim < 0.9);   // a "how many" question must not get a "where is" answer
+        var lenOk = Math.abs(e.st.length - qs.length) <= Math.max(3, qs.length);
+        scored.push({ e: e, sim: sim, typeOk: typeOk, lenOk: lenOk });
+      });
+      scored.sort(function (a, b) { return b.sim - a.sim; });
+      var seen = {};
+      scored.forEach(function (x) {
+        var k1 = 'q' + x.e.q.toLowerCase(), k2 = 'a' + x.e.a.toLowerCase();
+        if (seen[k1] || seen[k2]) return;
+        if (!out.best && x.typeOk && x.lenOk && x.sim >= 0.8) { out.best = expertCard(x); seen[k1] = seen[k2] = 1; return; }
+        if (out.others.length < (max || 3) && x.sim >= 0.6 && (x.typeOk || qt === 'general' || x.sim >= 0.75)) { out.others.push(expertCard(x)); seen[k1] = seen[k2] = 1; }
+      });
+      return out;
+    }
+    function expertMatch(query) { return expertAll(query).best; }
 
     /* ---- autocomplete ---- */
     function suggest(query, limit) {
@@ -896,7 +962,7 @@
     }
 
     return {
-      expert: expertMatch, passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
+      expert: expertMatch, experts: expertAll, passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
       stem: stem, norm: norm, words: words,
       chunk: function (i) { return chunks[i]; },
       process: function (id) { return procById[id]; },
