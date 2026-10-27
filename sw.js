@@ -1,5 +1,5 @@
 /* Offline cache so the installed web app keeps working without a connection. */
-const CACHE = 'pmm-coach-v6';
+const CACHE = 'pmm-coach-v7';
 const FILES = ['./', 'index.html', 'styles.css', 'app.js', 'engine.js', 'llm.js', 'llm-worker.js', 'pmm-index.js', 'manifest.webmanifest',
   'img/welcome.png', 'img/listening.png', 'img/thinking.png', 'img/explaining.png', 'img/success.png', 'img/encourage.png',
   'img/hill-logo.png', 'img/icon-192.png', 'img/apple-touch-icon.png', 'img/qr.png', 'img/icon-512.png', 'img/favicon.png',
