@@ -135,11 +135,87 @@
 
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
+  /* ---- Arabic for the fixed parts of an answer (the quoted manual text stays in English) ---- */
+  var AR_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  var AR_UNIT = {   // [1, 2, 3-10, 11+]
+    day: ['يوم واحد', 'يومان', 'أيام', 'يوماً'], week: ['أسبوع واحد', 'أسبوعان', 'أسابيع', 'أسبوعاً'],
+    month: ['شهر واحد', 'شهران', 'أشهر', 'شهراً'], hour: ['ساعة واحدة', 'ساعتان', 'ساعات', 'ساعة'], year: ['سنة واحدة', 'سنتان', 'سنوات', 'سنة']
+  };
+  var AR_PRE = { within: 'خلال', 'in': 'خلال', 'no later than': 'في موعد أقصاه', 'not exceed': 'بما لا يتجاوز', 'not to exceed': 'بما لا يتجاوز',
+    'not exceeding': 'بما لا يتجاوز', 'not to exceeding': 'بما لا يتجاوز', 'a maximum of': 'بحد أقصى', 'maximum of': 'بحد أقصى', 'up to': 'بحد أقصى',
+    'at least': 'على الأقل', before: 'قبل', after: 'بعد', every: 'كل', each: 'كل' };
+  var AR_FREQ = { monthly: 'شهرياً', weekly: 'أسبوعياً', quarterly: 'كل ثلاثة أشهر', annual: 'سنوياً', annually: 'سنوياً', daily: 'يومياً' };
+  var AR_ROLE = [   // longest first
+    ['NWC Project Manager', 'مدير المشروع في شركة المياه الوطنية'], ['Supervision Consultant', 'الاستشاري المشرف'], ['Design Consultant', 'استشاري التصميم'],
+    ['Cluster Technical Services Director', 'مدير الخدمات الفنية بالتجمع'], ['Cluster Scheduling & Control Director', 'مدير الجدولة والضبط بالتجمع'],
+    ['Cluster Construction GM', 'المدير العام للإنشاءات بالتجمع'], ['Cluster Capital Projects VP', 'نائب الرئيس للمشاريع الرأسمالية بالتجمع'],
+    ['Cluster Project Services GM', 'المدير العام لخدمات المشاريع بالتجمع'], ['Capital Projects EVP', 'النائب التنفيذي للرئيس للمشاريع الرأسمالية'],
+    ['Strategic Planning GM', 'المدير العام للتخطيط الاستراتيجي'], ['PMO GM', 'المدير العام لمكتب إدارة المشاريع'], ['Cluster Head', 'رئيس التجمع'],
+    ['Project Sponsor', 'راعي المشروع'], ['Project Initiator', 'مبادر المشروع'], ['Project Manager', 'مدير المشروع'], ['Program Manager', 'مدير البرنامج'],
+    ['Document Controller', 'مراقب الوثائق'], ['Risk Manager', 'مدير المخاطر'], ['Quality Manager', 'مدير الجودة'], ['HSE Manager', 'مدير الصحة والسلامة والبيئة'],
+    ['Supply Chain', 'سلسلة الإمداد'], ['Contractor', 'المقاول'], ['Consultant', 'الاستشاري'], ['Second Party', 'الطرف الثاني'], ['End User', 'المستخدم النهائي'],
+    ['Steering Committee', 'اللجنة التوجيهية'], ['Gate Keeper', 'حارس البوابة'], ['Gatekeeper', 'حارس البوابة'], ['Committee', 'اللجنة']
+  ];
+  var AR_NOUN = { stage: 'مراحل', stages: 'مراحل', gate: 'بوابات', gates: 'بوابات', 'stage gate': 'بوابات مراحل', 'stage gates': 'بوابات مراحل',
+    step: 'خطوات', steps: 'خطوات', phase: 'مراحل', phases: 'مراحل', level: 'مستويات', levels: 'مستويات', member: 'أعضاء', members: 'أعضاء',
+    type: 'أنواع', types: 'أنواع', category: 'فئات', categories: 'فئات', section: 'أقسام', sections: 'أقسام', procedure: 'إجراءات', procedures: 'إجراءات',
+    process: 'عمليات', processes: 'عمليات', role: 'أدوار', roles: 'أدوار', deliverable: 'مخرجات', deliverables: 'مخرجات', document: 'وثائق', documents: 'وثائق',
+    report: 'تقارير', reports: 'تقارير', meeting: 'اجتماعات', meetings: 'اجتماعات', review: 'مراجعات', reviews: 'مراجعات', criteria: 'معايير',
+    criterion: 'معايير', form: 'نماذج', forms: 'نماذج', template: 'قوالب', templates: 'قوالب', milestone: 'معالم', milestones: 'معالم', copies: 'نسخ', copy: 'نسخ' };
+  var AR_NOTE = {
+    'Similar timelines appear in more than one process; check which one applies.': 'تظهر مدد مماثلة في أكثر من إجراء؛ تحقق من الإجراء المنطبق.',
+    'The PMM counts these differently from your wording; closest related counts shown.': 'يحصي الدليل هذه البنود بصياغة مختلفة عن سؤالك؛ تُعرض أقرب الأعداد ذات الصلة.'
+  };
+  function arLtr(t) { return '\u2066' + t + '\u2069'; }                      // keep an English run readable inside Arabic
+  var AR_DUAL_GEN = { 'يومان': 'يومين', 'أسبوعان': 'أسبوعين', 'شهران': 'شهرين', 'ساعتان': 'ساعتين', 'سنتان': 'سنتين', 'يوما عمل': 'يومي عمل', 'يومان تقويميان': 'يومين تقويميين' };
+  var AR_TAIL_PREP = { from: 'من', of: 'من', after: 'بعد', following: 'بعد', since: 'منذ', before: 'قبل' };
+  var AR_TAIL_OBJ = { 'site handover': 'تسليم الموقع', 'site handover date': 'تاريخ تسليم الموقع', 'project site handover date': 'تاريخ تسليم موقع المشروع',
+    'contract signing': 'توقيع العقد', 'contract signing date': 'تاريخ توقيع العقد', 'submission': 'التقديم', 'submission date': 'تاريخ التقديم',
+    'its submission date': 'تاريخ تقديمه', 'receipt': 'الاستلام', 'receiving': 'الاستلام', 'notice date': 'تاريخ الإشعار', 'referral date': 'تاريخ الإحالة',
+    'work commencement meeting': 'اجتماع بدء الأعمال', 'invoice submission': 'تقديم الفاتورة', 'award': 'الترسية', 'contract award': 'ترسية العقد',
+    'request': 'الطلب', 'the request': 'الطلب', 'approval': 'الاعتماد', 'issuance': 'الإصدار', 'issue': 'الإصدار', 'completion': 'الإنجاز',
+    'occurrence of the suspension reasons': 'حدوث أسباب الإيقاف', 'partial resumption letter date': 'تاريخ خطاب الاستئناف الجزئي',
+    'tender schedule start date': 'تاريخ بدء الجدول الزمني للمناقصة', 'cluster submission': 'تقديم التجمع' };
+  function arTail(tail) {
+    var m = String(tail || '').trim().match(/^(from|of|after|following|since|before)\s+(?:the\s+)?(?:date of (?:the\s+)?)?(.+?)\s*$/i);
+    if (!m) return arLtr('(' + tail + ')');
+    var obj = AR_TAIL_OBJ[m[2].toLowerCase()];
+    return obj ? AR_TAIL_PREP[m[1].toLowerCase()] + ' ' + obj : arLtr('(' + tail + ')');
+  }
+  function arCount(n, forms) { return n === 1 ? forms[0] : n === 2 ? forms[1] : (n + ' ' + (n <= 10 ? forms[2] : forms[3])); }
+  function arUnit(n, unit, kind) {                                       // "15 calendar days" -> "15 يوماً تقويمياً"
+    var u = AR_UNIT[unit.replace(/s$/, '')] || AR_UNIT.day; kind = (kind || '').trim().toLowerCase();
+    if (unit.replace(/s$/, '') === 'day' && (kind === 'working' || kind === 'business'))
+      return n === 1 ? 'يوم عمل واحد' : n === 2 ? 'يوما عمل' : n + (n <= 10 ? ' أيام عمل' : ' يوم عمل');
+    if (unit.replace(/s$/, '') === 'day' && kind === 'calendar')
+      return n === 1 ? 'يوم تقويمي واحد' : n === 2 ? 'يومان تقويميان' : n + (n <= 10 ? ' أيام تقويمية' : ' يوماً تقويمياً');
+    return arCount(n, u);
+  }
+  function arDuration(pre, num, kind, unit, tail, defaultKind) {
+    var n = /^\d+$/.test(num) ? parseInt(num, 10) : (AR_NUM[String(num).toLowerCase()] || num);
+    var p = pre ? AR_PRE[String(pre).toLowerCase().replace(/\s+/g, ' ')] : '';
+    var core = arUnit(n, unit.toLowerCase(), kind);
+    if (p && p !== 'على الأقل' && AR_DUAL_GEN[core]) core = AR_DUAL_GEN[core];      // after a preposition: "خلال يومين"
+    var out = p === 'على الأقل' ? core + ' على الأقل' : (p ? p + ' ' : '') + core;
+    if (tail) out += ' ' + arTail(tail);
+    if (defaultKind) out += ' (أيام عمل ما لم ينص الدليل على أيام تقويمية)';
+    return out;
+  }
+  function arRole(r) {
+    var t = String(r || '').trim(), hit = '';
+    AR_ROLE.forEach(function (x) { if (!hit && t.toLowerCase() === x[0].toLowerCase()) hit = x[1]; });
+    if (!hit) AR_ROLE.forEach(function (x) { if (!hit && t.toLowerCase().indexOf(x[0].toLowerCase()) >= 0) hit = x[1] + ' ' + arLtr('(' + t + ')'); });
+    return hit || arLtr(t);
+  }
+  function arNoun(noun) { var k = String(noun || '').toLowerCase().trim(); return AR_NOUN[k] || arLtr(noun); }
+
   /* ------------------------------------------------------------------ */
   function create(index) {
     var t0 = Date.now();
     var chunks = index.chunks, N = chunks.length;
-    var procById = {}, secTitle = {};
+    var procById = {}, secTitle = {}, AR_NAMES = index.ar || { proc: {}, sec: {} };
+    function procAr(id) { return (AR_NAMES.proc || {})[id] || ''; }
+    function secAr(n) { return (AR_NAMES.sec || {})[n] || ''; }
     (index.sections || []).forEach(function (s) { secTitle[s.n] = s.title; });
     (index.processes || []).forEach(function (p) { procById[p.id] = p; });
     var secProcs = {};
@@ -839,9 +915,18 @@
         if (!pre) txt = core + (tail ? ' ' + tail[1].trim() : '');
         return txt.replace(/^./, function (z) { return z.toUpperCase(); }) + kind;
       }
+      function phraseAr(st) {
+        var m = DURATION_RX.exec(st); if (!m) return '';
+        var tail = st.slice(m.index + m[0].length).match(/^\s*((?:from|of|after|following|since|before)\b[^.;]{0,90})/i);
+        var pre = (m[0].match(/^\s*(within|in|no later than|not (?:to )?exceed(?:ing)?|a maximum of|maximum of|at least|before|after)\b/i) || [])[1];
+        return arDuration(pre, m[1], m[2], m[3], tail ? tail[1].trim() : '', !m[2] && /days?/i.test(m[3]));
+      }
       var heads = picks.map(function (x) { return phrase(x.s); });
+      var headsAr = picks.map(function (x) { return phraseAr(x.s); });
+      var multi = picks.length > 1 && heads[0] !== heads[1];
+      var headlineAr = multi ? headsAr.map(function (h, i) { return h + ' \u2013 ' + (procAr(picks[i].proc) || arLtr(picks[i].label)); }).join('   \u00b7   ') : headsAr[0];
       var headline = picks.length > 1 && heads[0] !== heads[1] ? heads.map(function (h, i) { return h + ' \u2013 ' + picks[i].label; }).join('   \u00b7   ') : heads[0];
-      return { type: 'duration', headline: headline, note: picks.length > 1 && heads[0] !== heads[1] ? 'Similar timelines appear in more than one process; check which one applies.' : '',
+      return { type: 'duration', headline: headline, headlineAr: headlineAr, note: picks.length > 1 && heads[0] !== heads[1] ? 'Similar timelines appear in more than one process; check which one applies.' : '',
         evidence: picks.map(function (x) { return { i: x.ix, p: x.p, text: x.s, proc: x.proc, label: x.label }; }), confidence: best.sc >= 0.95 ? 'high' : 'medium' };
     }
 
@@ -885,7 +970,9 @@
         var same = chosen.every(function (x) { return x.n === chosen[0].n; });
         var parts = chosen.map(function (x) { return x.n + ' ' + x.noun + (x.ctx ? ' (' + x.ctx + ')' : ''); });
         var head = same && chosen.length > 1 ? chosen[0].n + ' ' + chosen[0].noun : parts.join('  \u00b7  ');
-        return { type: 'count', headline: head, note: primary ? '' : 'The PMM counts these differently from your wording; closest related counts shown.',
+        var headAr = same && chosen.length > 1 ? chosen[0].n + ' ' + arNoun(chosen[0].noun)
+          : chosen.map(function (x) { return x.n + ' ' + arNoun(x.noun) + (x.ctx ? ' ' + arLtr('(' + x.ctx + ')') : ''); }).join('  \u00b7  ');
+        return { type: 'count', headline: head, headlineAr: headAr, note: primary ? '' : 'The PMM counts these differently from your wording; closest related counts shown.',
           evidence: chosen.map(function (x) { return { i: x.i, p: x.p, text: x.quote, proc: x.proc, label: x.ctx }; }), confidence: primary ? 'high' : 'medium' };
       }
 
@@ -917,29 +1004,32 @@
       if (!cands.length) return null;
       cands.sort(function (a, b) { return b.sc - a.sc; });
       var top = cands.filter(function (x, k) { return k < 3 && x.sc >= cands[0].sc * 0.55; });
-      var s0 = top[0].s, headline = '';
+      var s0 = top[0].s, headline = '', headlineAr = '';
 
       if (type === 'when') {
         var wantFreq = /how often|frequen/.test(nq), freqRx = /\b(monthly|weekly|quarterly|annual(ly)?|daily|every|each|per)\b/i;
         var dm = (wantFreq && !freqRx.test(s0)) ? null : s0.match(/\b(at least|within|no later than|before|every|each|up to)?\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(calendar |working |business )?(days?|weeks?|months?|hours?|years?)\b|\b(monthly|weekly|quarterly|annual(?:ly)?|daily)\b/i);
         if (dm) headline = dm[0].trim().replace(/^./, function (ch) { return ch.toUpperCase(); });
+        if (dm) headlineAr = dm[5] ? AR_FREQ[dm[5].toLowerCase()] || '' : arDuration(dm[1], dm[2], dm[3], dm[4], '', false);
       } else if (type === 'who') {
         var m1 = s0.match(/^(?:The |A |An )?([A-Z][A-Za-z&\/\- ]{2,70}?)\s+(?:shall|must|is responsible|will|approves?|should)\b/);
         var m2 = s0.match(/\b(?:is|are) the ([A-Z][A-Za-z&\/\- ]{2,70}?)(?:[.,;]|$)/);
         var roles = []; top.forEach(function (x) { var q = x.s.match(/\b(?:is|are) the ([A-Z][A-Za-z&\/\- ]{2,70}?)(?:[.,;]|$)/); if (q && roles.indexOf(q[1].trim()) < 0 && roles.length < 2) roles.push(q[1].trim()); });
         if (roles.length) headline = roles.join('  \u00b7  '); else if (m2) headline = m2[1].trim(); else if (m1) headline = m1[1].trim();
+        if (roles.length) headlineAr = roles.map(arRole).join('  \u00b7  '); else if (headline) headlineAr = arRole(headline);
       } else if (type === 'define') {
         headline = s0.length > 230 ? s0.slice(0, 227) + '\u2026' : s0;
       } else if (type === 'yesno') {
-        if (/\b(must not|shall not|not allowed|prohibited|cannot|may not)\b/i.test(s0)) headline = 'Not allowed \u2013 the PMM says:';
-        else if (/\b(shall|must|required|mandatory)\b/i.test(s0)) headline = 'Required \u2013 the PMM says:';
-        else headline = 'The PMM says:';
+        if (/\b(must not|shall not|not allowed|prohibited|cannot|may not)\b/i.test(s0)) { headline = 'Not allowed \u2013 the PMM says:'; headlineAr = 'غير مسموح \u2013 ينص الدليل على:'; }
+        else if (/\b(shall|must|required|mandatory)\b/i.test(s0)) { headline = 'Required \u2013 the PMM says:'; headlineAr = 'مطلوب \u2013 ينص الدليل على:'; }
+        else { headline = 'The PMM says:'; headlineAr = 'ينص الدليل على:'; }
       } else if (type === 'list') {
         var c0 = chunks[top[0].i], lines = c0.t.split('\n').filter(function (l) { return /^\s*(\d{1,2}[.)]|[a-z][.)]|[\u2022\-])\s/.test(l); });
-        if (lines.length >= 2) { headline = lines.length + ' items'; return { type: 'list', headline: headline, items: lines.slice(0, 14).map(function (l) { return l.replace(/^\s*(\d{1,2}[.)]|[a-z][.)]|[\u2022\-])\s*/, ''); }),
+        if (lines.length >= 2) { headline = lines.length + ' items'; return { type: 'list', headline: headline, headlineAr: arCount(lines.length, ['بند واحد', 'بندان', 'بنود', 'بنداً']), items: lines.slice(0, 14).map(function (l) { return l.replace(/^\s*(\d{1,2}[.)]|[a-z][.)]|[\u2022\-])\s*/, ''); }),
           evidence: [{ i: top[0].i, p: top[0].p, text: top[0].s, proc: top[0].proc, label: top[0].label }], confidence: top[0].cov === 1 ? 'high' : 'medium' }; }
       }
-      return { type: type, headline: headline, evidence: top.map(function (x) { return { i: x.i, p: x.p, text: x.s, proc: x.proc, label: x.label }; }),
+      if (type === 'define' && headline) headlineAr = 'التعريف كما ورد في الدليل (بالإنجليزية):';
+      return { type: type, headline: headline, headlineAr: headlineAr, evidence: top.map(function (x) { return { i: x.i, p: x.p, text: x.s, proc: x.proc, label: x.label }; }),
         confidence: top[0].cov === 1 ? 'high' : 'medium' };
     }
 
@@ -962,7 +1052,7 @@
     }
 
     return {
-      expert: expertMatch, experts: expertAll, passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
+      expert: expertMatch, experts: expertAll, procAr: procAr, secAr: secAr, noteAr: function (t) { return AR_NOTE[t] || ''; }, passages: passages, answer: answer, search: search, suggest: suggest, interpret: interpret, related: related,
       stem: stem, norm: norm, words: words,
       chunk: function (i) { return chunks[i]; },
       process: function (id) { return procById[id]; },

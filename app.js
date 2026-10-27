@@ -291,9 +291,10 @@
   }
 
   function answerHTML(a, afterExpert) {
-    var h = '<section class="answer" aria-label="Answer"><div class="a-tag">' + (afterExpert ? 'Requirements from the PMM' : a.headline ? 'Answer' : 'Closest statements in the PMM') + '</div>';
+    var h = '<section class="answer" aria-label="Answer"><div class="a-tag">' + (afterExpert ? 'Requirements from the PMM' : a.headline ? (a.headlineAr ? 'Answer \u00b7 <span lang="ar">\u0627\u0644\u0625\u062C\u0627\u0628\u0629</span>' : 'Answer') : 'Closest statements in the PMM') + '</div>';
     if (a.headline) h += '<p class="a-main">' + esc(a.headline) + '</p>';
-    if (a.note) h += '<p class="a-note">' + esc(a.note) + '</p>';
+    if (a.headline && a.headlineAr) h += '<p class="a-main a-ar" lang="ar" dir="rtl">' + esc(a.headlineAr).replace(/\u2066([^\u2069]*)\u2069/g, '<bdi dir="ltr">$1</bdi>') + '</p>';   // Arabic for the answer line; quotes stay in English
+    if (a.note) h += '<p class="a-note">' + esc(a.note) + (engine.noteAr && engine.noteAr(a.note) ? '<span class="a-note-ar" lang="ar" dir="rtl">' + esc(engine.noteAr(a.note)) + '</span>' : '') + '</p>';
     if (a.items) h += '<ol class="a-list">' + a.items.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ol>';
     h += '<ul class="a-ev">' + a.evidence.map(function (e) {
       return '<li><span class="a-q">' + engine.highlight(e.text.length > 360 ? e.text.slice(0, 357) + '\u2026' : e.text, hlStems) + '</span><span class="a-src">' + esc(e.proc && e.proc.indexOf('SEC-') !== 0 ? e.proc + ' \u00b7 ' : '') + 'p.' + e.p +
@@ -319,7 +320,9 @@
     res.groups.slice(0, S.showGroups).forEach(function (g, gi) {
       var open = S.expanded[g.id], lim = open ? 15 : 3, items = g.items.slice(0, lim);
       var best = gi === 0 && res.groups.length > 1 && !res.direct && !res.exp;   // the expert card is the best match when there is one
-      h += '<section class="group' + (best ? ' best' : '') + '"><div class="g-head"><h3 class="g-title"><button type="button" data-ctx="' + esc(g.id) + '">' + esc(g.title) + '</button></h3>' + (best ? '<span class="badge" title="No expert answer matched, so this is the closest part of the manual. The manual is in English only.">Best match \u00b7 manual (English only)</span>' : '<span></span>') +
+      h += '<section class="group' + (best ? ' best' : '') + '"><div class="g-head"><h3 class="g-title"><button type="button" data-ctx="' + esc(g.id) + '">' + esc(g.title) + '</button></h3>' + (best ? '<span class="badge" title="No expert answer matched, so this is the closest part of the manual. Quoted manual text is in English.">Best match \u00b7 <span lang="ar">\u0623\u0641\u0636\u0644 \u062A\u0637\u0627\u0628\u0642</span></span>' : '<span></span>') +
+        (best && engine.procAr && (engine.procAr(g.id) || engine.secAr(g.section)) ? '<p class="g-ar" lang="ar" dir="rtl">' + (engine.procAr(g.id) ? '<b>' + esc(engine.procAr(g.id)) + '</b>' : '') +
+          (engine.secAr(g.section) ? '<span>\u0627\u0644\u0642\u0633\u0645 ' + g.section + ' \u00b7 ' + esc(engine.secAr(g.section)) + '</span>' : '') + '<span class="g-ar-note">\u0646\u0635 \u0627\u0644\u062F\u0644\u064A\u0644 \u0623\u062F\u0646\u0627\u0647 \u0628\u0627\u0644\u0644\u063A\u0629 \u0627\u0644\u0625\u0646\u062C\u0644\u064A\u0632\u064A\u0629</span></p>' : '') +
         '<div class="g-meta">' + (g.pseudo ? '' : '<span class="code">' + esc(g.id) + '</span>') + '<span>Section ' + g.section + ' \u00b7 ' + esc(g.sectionTitle.replace(/^Project /, '')) + '</span><span>p.' + g.page + '</span><span>' + g.count + ' match' + (g.count === 1 ? '' : 'es') + '</span></div></div>';
       h += items.map(function (it) { return itemHTML(it, res); }).join('');
       if (g.count > items.length) h += '<button type="button" class="more" data-expand="' + esc(g.id) + '">Show ' + Math.min(g.count - items.length, 15 - items.length) + ' more in this process</button>';

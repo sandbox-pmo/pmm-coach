@@ -360,3 +360,12 @@ details.inst summary{cursor:pointer;padding:.6rem 0;font-weight:600}
 .answer.others summary{cursor:pointer;font-weight:600;font-size:.95rem}
 .answer.others details p{margin:.35rem 0 0;font-size:.93rem;max-width:75ch}
 .bx-col bdi{white-space:nowrap}
+
+/* Arabic for the fixed parts of an answer and the best-match process name */
+.a-main.a-ar{font-family:"Segoe UI",Tahoma,"Noto Naskh Arabic","Geeza Pro",system-ui,sans-serif;font-size:1.3rem;line-height:1.5;margin-top:-.2rem}
+.a-note-ar{display:block;font-family:"Segoe UI",Tahoma,"Noto Naskh Arabic",system-ui,sans-serif;margin-top:.15rem}
+.g-ar{grid-column:1/-1;margin:.25rem 0 0;display:flex;flex-wrap:wrap;gap:.2rem .8rem;font-family:"Segoe UI",Tahoma,"Noto Naskh Arabic","Geeza Pro",system-ui,sans-serif;font-size:.95rem}
+.g-ar b{font-weight:700}
+.g-ar span{color:var(--muted);font-size:.85rem}
+.g-ar .g-ar-note{font-style:italic}
+.a-main.a-ar bdi{white-space:nowrap;font-size:.8em;font-weight:600}
