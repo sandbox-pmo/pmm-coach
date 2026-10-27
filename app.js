@@ -755,6 +755,9 @@
     applyPrefs();
     if (desktop && desktop.getPrefs) desktop.getPrefs().then(function (p) { desktop.prefs = p; }).catch(function () {});
     IDB.get('index').then(function (idx) {
+      // a copy built into the app (Android/desktop) wins over an older stored copy
+      var stamp = function (x) { return (x && x.meta && (x.meta.updated || x.meta.built)) || ''; };
+      if (idx && idx.chunks && window.PMM_INDEX && stamp(window.PMM_INDEX) > stamp(idx)) idx = null;
       if (idx && idx.chunks) { start(idx, true); afterStart(); checkUpdate(codeFromLink()); return; }
       if (window.PMM_INDEX) { start(window.PMM_INDEX, false); afterStart(); return; }
       fetch('pmm-index.enc', { method: 'HEAD' }).then(function (r) {
